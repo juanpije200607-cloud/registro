@@ -198,7 +198,21 @@ function pidePin(msg) {
   $('#pantalla .wrap').appendChild(c);
 }
 
+/* JP le manda un link con la direccion del script adentro, para que
+   Franco solo teclee su PIN y no tenga que pegar nada. */
+function tomaDelLink() {
+  var h = location.hash || '';
+  var m = h.match(/[#&]s=([^&]+)/);
+  if (!m) return;
+  try {
+    var dir = decodeURIComponent(m[1]).trim().split('?')[0];
+    if (dir.indexOf('/exec') > 0) set(LS.url, dir);
+  } catch (e) {}
+  try { history.replaceState(null, '', location.pathname); } catch (e) { location.hash = ''; }
+}
+
 function arranca() {
+  tomaDelLink();
   var cache = get(LS.cat);
   if (cache && get(LS.pin) && get(LS.url)) {
     try {
@@ -284,8 +298,9 @@ function vInicio(p) {
 
   var k = el('div', 'kpis');
   [['Piezas', String(h.piezas || 0)],
-   ['Ingresos', pesos(h.ingresos)],
-   esJP ? ['Tuyas / Franco', (h.mias || 0) + ' / ' + (h.franco || 0)] : null]
+   esJP ? ['Ingresos', pesos(h.ingresos)] : ['Tu comisión', pesos(h.comision)],
+   esJP ? ['Tuyas / Franco', (h.mias || 0) + ' / ' + (h.franco || 0)]
+        : ['Ingresos', pesos(h.ingresos)]]
     .filter(Boolean).forEach(function (x) {
       var d = el('div', 'kpi');
       d.appendChild(el('b', null, x[1]));
@@ -293,6 +308,61 @@ function vInicio(p) {
       k.appendChild(d);
     });
   p.appendChild(k);
+
+  /* Franco: lo primero que necesita ver es lo que debe y lo que le llegó */
+  if (!esJP) {
+    var sfy = S.datos.saldoFranco || {};
+    var cd = el('div', 'card');
+    cd.appendChild(el('div', 'mini', 'Le debes a JP'));
+    cd.appendChild(el('div', 'num', pesos(sfy.debe)));
+    [['Piezas que has vendido', String(sfy.piezas || 0)],
+     ['Tu comisión acumulada', pesos(sfy.comision)],
+     ['Ya le entregaste', pesos(sfy.pagado)],
+     sfy.porCobrar ? ['Te deben clientes', pesos(sfy.porCobrar)] : null]
+      .filter(Boolean).forEach(function (x) {
+        var ren = el('div', 'ren');
+        ren.appendChild(el('div', 'mini', x[0]));
+        ren.appendChild(el('div', 'tab-num', x[1]));
+        cd.appendChild(ren);
+      });
+    p.appendChild(cd);
+
+    var pc = S.datos.porConfirmar || [];
+    if (pc.length) {
+      var tot = pc.reduce(function (a, b) { return a + b.piezas; }, 0);
+      p.appendChild(el('div', 'cap', 'JP te mandó ' + tot +
+        (tot === 1 ? ' pieza' : ' piezas')));
+      var gc = el('div', 'group');
+      pc.forEach(function (x) {
+        var ren = el('div', 'ren');
+        var iz = el('div', 'col');
+        iz.appendChild(el('div', null, x.sabor));
+        iz.appendChild(el('div', 'mini', x.modelo + ' · ' + x.fecha + ' ' + x.hora));
+        ren.appendChild(iz);
+        ren.appendChild(el('div', 'tab-num', '×' + x.piezas));
+        gc.appendChild(ren);
+      });
+      p.appendChild(gc);
+      var fb = el('div', 'fila');
+      fb.style.gap = '8px';
+      var bf = el('button', 'b', 'Falta algo');
+      bf.style.flex = '1';
+      bf.onclick = function () { faltaAlgo(pc); };
+      var br = el('button', 'b gde', 'Recibido');
+      br.style.flex = '1.3';
+      br.onclick = function () {
+        pc.forEach(function (x) {
+          encola({ t: 'Recibido', q: 'Franco', rf: x.folio, mo: x.modelo, sa: x.sabor,
+                   pz: 0, no: 'Confirmado por Franco' });
+        });
+        S.datos.porConfirmar = [];
+        avisa('Confirmado');
+        pinta();
+      };
+      fb.appendChild(bf); fb.appendChild(br);
+      p.appendChild(fb);
+    }
+  }
 
   /* ventas del día por hora */
   var horas = h.horas || [];
@@ -722,6 +792,33 @@ function vMasDatos() {
     });
   var b = el('button', 'b gde', 'Listo');
   b.onclick = function () { hoja(null); pinta(); };
+  c.appendChild(b);
+  hoja(c);
+}
+
+/* Si lo que le llego no cuadra, Franco lo dice con sus palabras y JP lo ve.
+   No se toca el inventario: lo corrige JP con un ajuste por conteo. */
+function faltaAlgo(pc) {
+  var d = { txt: '' };
+  var c = el('div', 'col g16');
+  c.appendChild(el('h1', null, 'Falta algo'));
+  c.appendChild(el('div', 'mini',
+    'Escribe qué no llegó o qué llegó de más. JP lo ve y lo corrige; el stock no se mueve con esto.'));
+  var i = el('input', 'campo');
+  i.type = 'text';
+  i.placeholder = 'Ej. faltó 1 Mojito Mint';
+  i.oninput = function () { d.txt = i.value; };
+  c.appendChild(i);
+  var b = el('button', 'b gde', 'Avisarle a JP');
+  b.onclick = function () {
+    if (!d.txt.trim()) { avisa('Escribe qué pasó'); return; }
+    pc.forEach(function (x) {
+      encola({ t: 'Recibido', q: 'Franco', rf: x.folio, mo: x.modelo, sa: x.sabor,
+               pz: 0, no: 'Franco reporta: ' + d.txt.trim() });
+    });
+    S.datos.porConfirmar = [];
+    hoja(null); avisa('Avisado'); pinta();
+  };
   c.appendChild(b);
   hoja(c);
 }
