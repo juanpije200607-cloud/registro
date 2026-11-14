@@ -98,16 +98,36 @@ function sube() {
 window.addEventListener('online', sube);
 
 function baja(silencio) {
-  if (!navigator.onLine) { if (!silencio) avisa('Sin señal'); return; }
-  fetch(get(LS.url) + '?pin=' + encodeURIComponent(get(LS.pin)))
-    .then(function (r) { return r.json(); })
-    .then(function (j) {
-      if (!j || !j.ok) { if (j && j.error === 'pin') pidePin('Ese PIN no es'); return; }
+  if (!navigator.onLine) {
+    if (S.datos) { if (!silencio) avisa('Sin señal'); }
+    else pidePin('Sin señal. Conéctate y vuelve a entrar.');
+    return;
+  }
+  var url = (get(LS.url) || '').trim().split('?')[0];
+  fetch(url + '?pin=' + encodeURIComponent(get(LS.pin)))
+    .then(function (r) {
+      if (!r.ok) throw new Error('el servidor contestó ' + r.status);
+      return r.text();
+    })
+    .then(function (t) {
+      var j;
+      try { j = JSON.parse(t); }
+      catch (e) {
+        throw new Error('la dirección no devolvió datos. Revisa que termine en /exec y que el script esté publicado para cualquier usuario');
+      }
+      if (!j.ok) {
+        pidePin(j.error === 'pin' ? 'Ese PIN no es. Revísalo en Ajustes del Sheet.'
+          : 'El script contestó un error: ' + (j.error || 'desconocido'));
+        return;
+      }
       S.rol = j.rol; S.datos = j;
       set(LS.cat, JSON.stringify(j.catalogo));
       pinta();
     })
-    .catch(function () { if (!silencio) avisa('No se pudo actualizar'); });
+    .catch(function (e) {
+      if (S.datos) { if (!silencio) avisa('No se pudo actualizar'); }
+      else pidePin('No se pudo conectar: ' + (e.message || 'falló la conexión'));
+    });
 }
 
 function bajaResultados() {
@@ -133,15 +153,15 @@ function pidePin(msg) {
   c.appendChild(el('h1', null, 'Registro'));
   if (msg) c.appendChild(el('div', 'sub', msg));
 
-  if (!get(LS.url)) {
-    c.appendChild(el('div', 'eti', 'Dirección del script'));
-    var u = el('input', 'campo'); u.type = 'url'; u.placeholder = 'https://script.google.com/...';
-    u.style.fontSize = '15px';
-    c.appendChild(u);
-    c.appendChild(el('div', 'mini', 'Se pega una sola vez en cada celular y se queda guardada aquí.'));
-    c.dataset.url = '1';
-    c.u = u;
-  }
+  c.appendChild(el('div', 'eti', 'Dirección del script'));
+  var u = el('input', 'campo');
+  u.type = 'url'; u.placeholder = 'https://script.google.com/...';
+  u.value = get(LS.url) || '';
+  u.style.fontSize = '14px';
+  c.appendChild(u);
+  c.appendChild(el('div', 'mini',
+    'Se pega una vez por celular y se queda guardada. Tiene que terminar en /exec.'));
+  c.u = u;
 
   c.appendChild(el('div', 'eti', 'Tu PIN'));
   var p = el('input', 'campo');
@@ -150,10 +170,10 @@ function pidePin(msg) {
 
   var b = el('button', 'b gde', 'Entrar');
   b.onclick = function () {
-    if (c.u) {
-      if (!c.u.value.trim()) { avisa('Falta la dirección'); return; }
-      set(LS.url, c.u.value.trim());
-    }
+    var dir = (c.u.value || '').trim().split('?')[0];
+    if (!dir) { avisa('Falta la dirección'); return; }
+    if (dir.indexOf('/exec') < 0) { avisa('La dirección debe terminar en /exec'); return; }
+    set(LS.url, dir);
     if (!p.value.trim()) { avisa('Falta el PIN'); return; }
     set(LS.pin, p.value.trim());
     $('#pantalla').innerHTML = '';
