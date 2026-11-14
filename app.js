@@ -282,11 +282,9 @@ function vInicio(p) {
   izq.appendChild(el('div', 'sub', new Date().toLocaleDateString('es-MX',
     { weekday: 'long', day: 'numeric', month: 'long' })));
   cab.appendChild(izq);
-  if (esJP) {
-    var g = el('button', 'b chico', 'Ajustes');
-    g.onclick = vAjustes;
-    cab.appendChild(g);
-  }
+  var g = el('button', 'b chico', 'Ajustes');
+  g.onclick = vAjustes;
+  cab.appendChild(g);
   p.appendChild(cab);
   barraCola(p);
 
@@ -1389,8 +1387,9 @@ function vResultados(p) {
 function vAjustes() {
   var c = el('div', 'col g16');
   c.appendChild(el('h1', null, 'Ajustes'));
-  c.appendChild(el('div', 'mini',
-    'Precios, costos, comisiones y vendedores se cambian en el Sheet, no aquí.'));
+  c.appendChild(el('div', 'mini', S.rol === 'JP'
+    ? 'Precios, costos, comisiones y vendedores se cambian en el Sheet, no aquí.'
+    : 'Si algo no cuadra, avísale a JP: los precios y las comisiones se cambian de su lado.'));
 
   var b1 = el('button', 'b', 'Actualizar catálogo y stock');
   b1.onclick = function () { hoja(null); baja(); avisa('Actualizando…'); };
