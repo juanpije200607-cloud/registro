@@ -187,15 +187,15 @@ function pidePin(msg) {
     set(LS.url, dir);
     if (!p.value.trim()) { avisa('Falta el PIN'); return; }
     set(LS.pin, p.value.trim());
-    $('#pantalla').innerHTML = '';
-    $('#pantalla').appendChild(el('div', 'sub', 'Entrando…'));
+    $('#pantalla .wrap').innerHTML = '';
+    $('#pantalla .wrap').appendChild(el('div', 'sub', 'Entrando…'));
     baja();
   };
   c.appendChild(b);
 
   $('#nav').innerHTML = '';
-  $('#pantalla').innerHTML = '';
-  $('#pantalla').appendChild(c);
+  $('#pantalla .wrap').innerHTML = '';
+  $('#pantalla .wrap').appendChild(c);
 }
 
 function arranca() {
@@ -216,12 +216,11 @@ function arranca() {
 function pinta() {
   if (!S.datos) return;
   set(LS.quien, S.rol);
-  var p = $('#pantalla');
+  var p = $('#pantalla .wrap');
   p.innerHTML = '';
-  p.className = 'tope';
   /* Solo al cambiar de pestaña: si se reiniciara en cada repintado,
      elegir un sabor te brincaría al inicio de la pantalla. */
-  if (pinta.ultima !== S.tab) { p.scrollTop = 0; pinta.ultima = S.tab; }
+  if (pinta.ultima !== S.tab) { $('#pantalla').scrollTop = 0; pinta.ultima = S.tab; }
   ({
     inicio: vInicio, venta: vVenta, pend: vPendientes,
     inv: vInventario, franco: vFranco, res: vResultados
@@ -261,96 +260,186 @@ function barraCola(p) {
 
 function vInicio(p) {
   var h = S.datos.hoy || {};
+  var esJP = S.rol === 'JP';
+
   var cab = el('div', 'fila');
   var izq = el('div', 'col');
-  izq.appendChild(el('h1', null, S.rol === 'Franco' ? 'Hola, Franco' : 'Hoy'));
+  izq.appendChild(el('h1', null, esJP ? 'Hoy' : 'Hola, Franco'));
   izq.appendChild(el('div', 'sub', new Date().toLocaleDateString('es-MX',
     { weekday: 'long', day: 'numeric', month: 'long' })));
   cab.appendChild(izq);
-  if (S.rol === 'JP') {
-    var g = el('button', 'b chico', '⚙');
-    g.style.minWidth = '44px';
+  if (esJP) {
+    var g = el('button', 'b chico', 'Ajustes');
     g.onclick = vAjustes;
     cab.appendChild(g);
   }
   p.appendChild(cab);
   barraCola(p);
 
+  /* lo del día */
   var c = el('div', 'card');
-  var f1 = el('div', 'fila');
-  var cI = el('div', 'col g6');
-  cI.appendChild(el('div', 'mini', S.rol === 'JP' ? 'Utilidad de hoy' : 'Vendido hoy'));
-  cI.appendChild(el('div', 'num', pesos(S.rol === 'JP' ? h.utilidad : h.ingresos)));
-  f1.appendChild(cI);
-  c.appendChild(f1);
-
-  var f2 = el('div', 'fila');
-  f2.style.cssText = 'border-top:1px solid var(--line); margin-top:12px; padding-top:11px';
-  [['Piezas', h.piezas || 0], ['Ingresos', pesos(h.ingresos)],
-   S.rol === 'JP' ? ['Tuyas / Franco', (h.mias || 0) + ' / ' + (h.franco || 0)] : null]
-    .filter(Boolean).forEach(function (x) {
-      var k = el('div', 'col');
-      k.appendChild(el('div', 'mini', x[0]));
-      var v = el('div', null, x[1]);
-      v.style.cssText = 'font-size:17px; font-weight:700';
-      k.appendChild(v);
-      f2.appendChild(k);
-    });
-  c.appendChild(f2);
+  c.appendChild(el('div', 'mini', esJP ? 'Utilidad de hoy' : 'Vendido hoy'));
+  c.appendChild(el('div', 'num', pesos(esJP ? h.utilidad : h.ingresos)));
   p.appendChild(c);
-  p.appendChild(el('div', null, '')).style.height = '12px';
 
-  var pend = (S.datos.pendientes || []);
-  if (pend.length) {
-    var total = pend.reduce(function (a, b) { return a + b.resta; }, 0);
-    var atras = pend.filter(function (x) { return x.dias >= (S.datos.diasAtraso || 14); }).length;
-    var cp = el('div', 'card mal');
-    cp.style.marginBottom = '12px';
-    var ff = el('div', 'fila');
-    var ci = el('div', 'col g6');
-    var t1 = el('div', null, (S.rol === 'Franco' ? 'Te deben ' : 'Te deben ') + pesos(total));
-    t1.style.cssText = 'font-size:15px; font-weight:600';
-    ci.appendChild(t1);
-    ci.appendChild(el('div', 'mini', pend.length + ' ventas' +
-      (atras ? ' · ' + atras + ' pasaron de ' + (S.datos.diasAtraso || 14) + ' días' : '')));
-    ff.appendChild(ci);
-    ff.appendChild(el('div', null, '›'));
-    cp.appendChild(ff);
-    cp.onclick = function () { S.tab = 'pend'; pinta(); };
-    p.appendChild(cp);
+  var k = el('div', 'kpis');
+  [['Piezas', String(h.piezas || 0)],
+   ['Ingresos', pesos(h.ingresos)],
+   esJP ? ['Tuyas / Franco', (h.mias || 0) + ' / ' + (h.franco || 0)] : null]
+    .filter(Boolean).forEach(function (x) {
+      var d = el('div', 'kpi');
+      d.appendChild(el('b', null, x[1]));
+      d.appendChild(el('span', null, x[0]));
+      k.appendChild(d);
+    });
+  p.appendChild(k);
+
+  /* ventas del día por hora */
+  var horas = h.horas || [];
+  var ch = el('div', 'card');
+  ch.appendChild(el('div', 'fila', ''));
+  var fh = ch.firstChild;
+  fh.appendChild(el('div', 'mini', 'Ventas de hoy por hora'));
+  fh.appendChild(el('div', 'mini', (h.piezas || 0) + ' piezas'));
+  if (!horas.length) {
+    ch.appendChild(el('div', 'mini', 'Todavía no hay ventas hoy.'));
+  } else {
+    var desde = 8, hasta = 23;
+    horas.forEach(function (x) {
+      var n = parseInt(x.h, 10);
+      if (!isNaN(n)) { desde = Math.min(desde, n); hasta = Math.max(hasta, n); }
+    });
+    var mapa = {};
+    horas.forEach(function (x) { mapa[parseInt(x.h, 10)] = x; });
+    var max = 1;
+    horas.forEach(function (x) { max = Math.max(max, x.piezas); });
+    var barras = el('div', 'barras');
+    var ejes = el('div', 'ejes');
+    var ahora = new Date().getHours();
+    for (var i = desde; i <= hasta; i++) {
+      var x2 = mapa[i];
+      var b = el('div', i === ahora ? 'hoy' : '');
+      b.style.height = Math.round(100 * ((x2 ? x2.piezas : 0) / max)) + '%';
+      b.title = i + ':00 · ' + (x2 ? x2.piezas + ' piezas · ' + pesos(x2.ingresos) : 'nada');
+      barras.appendChild(b);
+      var e = el('span', null, (i % 3 === 0 || i === ahora) ? String(i) : '');
+      ejes.appendChild(e);
+    }
+    ch.appendChild(barras);
+    ch.appendChild(ejes);
+    var pico = horas.slice().sort(function (a, b2) { return b2.piezas - a.piezas; })[0];
+    ch.appendChild(el('div', 'mini',
+      'La hora más fuerte fue la de ' + parseInt(pico.h, 10) + ':00, con ' +
+      pico.piezas + (pico.piezas === 1 ? ' pieza.' : ' piezas.')));
+  }
+  p.appendChild(ch);
+
+  /* últimos movimientos del día */
+  if ((h.ultimas || []).length) {
+    p.appendChild(el('div', 'cap', 'Lo último de hoy'));
+    var gu = el('div', 'group');
+    h.ultimas.slice(0, 5).forEach(function (u) {
+      var ren = el('div', 'ren');
+      var iz = el('div', 'col');
+      iz.appendChild(el('div', null, (u.pr === '2x' ? '2× ' : '') +
+        u.modelo.split(' ').slice(0, 2).join(' ') + ' · ' + u.sabor));
+      iz.appendChild(el('div', 'mini', u.hora + (esJP && u.quien !== 'JP' ? ' · ' + u.quien : '') +
+        (u.fp === 'Pendiente' ? ' · debe' : '')));
+      ren.appendChild(iz);
+      ren.appendChild(el('div', 'tab-num', pesos(u.monto)));
+      gu.appendChild(ren);
+    });
+    p.appendChild(gu);
   }
 
-  if (S.rol === 'JP') {
-    var falta = faltaMaleta();
-    if (falta.length) {
-      var cm = el('div', 'card ac');
-      cm.style.marginBottom = '12px';
-      var t2 = el('div', null, 'A la maleta le faltan ' +
-        falta.reduce(function (a, b) { return a + b.n; }, 0) + ' piezas');
-      t2.style.cssText = 'font-size:15px; font-weight:600; color:var(--ac-bright)';
-      cm.appendChild(t2);
-      cm.appendChild(el('div', 'mini', falta.slice(0, 3).map(function (x) {
-        return x.mo + ' ' + x.sa + ' ×' + x.n;
-      }).join(' · ') + (falta.length > 3 ? ' y ' + (falta.length - 3) + ' más' : '')));
-      cm.onclick = function () { S.tab = 'inv'; pinta(); };
-      p.appendChild(cm);
-    }
+  /* por cobrar: siempre a la vista, aunque esté en cero */
+  var pend = (S.datos.pendientes || []);
+  var total = pend.reduce(function (a, b) { return a + b.resta; }, 0);
+  var atras = pend.filter(function (x) { return x.dias >= (S.datos.diasAtraso || 14); }).length;
+  var cabp = el('div', 'fila');
+  cabp.appendChild(el('div', 'cap', 'Por cobrar'));
+  if (pend.length) {
+    var pil = el('div', 'pill ' + (atras ? 'bad' : 'n'),
+      atras ? atras + ' atrasados' : pend.length + ' ventas');
+    cabp.appendChild(pil);
+  }
+  p.appendChild(cabp);
 
+  var gp = el('div', 'group');
+  if (!pend.length) {
+    var vac = el('div', 'ren');
+    vac.appendChild(el('div', 'mini', 'Nadie te debe. Así se ve cuando está limpio.'));
+    gp.appendChild(vac);
+  } else {
+    var tot = el('div', 'ren');
+    tot.appendChild(el('div', null, 'Te deben en total'));
+    var tv = el('div', 'tab-num');
+    tv.style.fontWeight = '700';
+    tv.textContent = pesos(total);
+    tot.appendChild(tv);
+    gp.appendChild(tot);
+    pend.slice(0, 3).forEach(function (x) {
+      var ren = el('div', 'ren');
+      var iz = el('div', 'col');
+      iz.appendChild(el('div', null, x.cliente || 'Sin nombre'));
+      var sub = el('div', 'mini', x.modelo.split(' ').slice(0, 2).join(' ') + ' · hace ' +
+        x.dias + ' días' + (x.abonado ? ' · abonó ' + pesos(x.abonado) : ''));
+      if (x.dias >= (S.datos.diasAtraso || 14)) sub.className = 'mini malo';
+      iz.appendChild(sub);
+      ren.appendChild(iz);
+      ren.appendChild(el('div', 'tab-num', pesos(x.resta)));
+      ren.onclick = function () { cobro(x); };
+      gp.appendChild(ren);
+    });
+    var ver = el('div', 'ren');
+    ver.appendChild(el('div', null, pend.length > 3
+      ? 'Ver los ' + pend.length + ' y cobrar' : 'Cobrar'));
+    ver.appendChild(el('div', 'mini', '›'));
+    ver.onclick = function () { S.tab = 'pend'; pinta(); };
+    gp.appendChild(ver);
+  }
+  p.appendChild(gp);
+
+  /* pendientes de JP: maleta y Franco */
+  if (esJP) {
+    var falta = faltaMaleta();
+    var gj = el('div', 'group');
+    if (falta.length) {
+      var ren1 = el('div', 'ren');
+      var iz1 = el('div', 'col');
+      var t1 = el('div', null, 'A la maleta le faltan ' +
+        falta.reduce(function (a, b) { return a + b.n; }, 0) + ' piezas');
+      t1.className = 'alerta';
+      iz1.appendChild(t1);
+      iz1.appendChild(el('div', 'mini', falta.slice(0, 2).map(function (x) {
+        return x.sa + ' ×' + x.n;
+      }).join(' · ') + (falta.length > 2 ? ' y ' + (falta.length - 2) + ' más' : '')));
+      ren1.appendChild(iz1);
+      ren1.appendChild(el('div', 'mini', '›'));
+      ren1.onclick = rellenarMaleta;
+      gj.appendChild(ren1);
+    }
     var sf = S.datos.saldoFranco;
     if (sf) {
-      var cf = el('div', 'card');
-      cf.style.marginBottom = '12px';
-      var t3 = el('div', null, 'Franco te debe ' + pesos(sf.debe));
-      t3.style.cssText = 'font-size:15px; font-weight:600';
-      cf.appendChild(t3);
-      cf.appendChild(el('div', 'mini', sf.piezas + ' piezas vendidas'));
-      cf.onclick = function () { S.tab = 'franco'; pinta(); };
-      p.appendChild(cf);
+      var ren2 = el('div', 'ren');
+      var iz2 = el('div', 'col');
+      iz2.appendChild(el('div', null, 'Franco te debe'));
+      iz2.appendChild(el('div', 'mini', sf.piezas + ' piezas vendidas' +
+        (sf.porCobrar ? ' · ' + pesos(sf.porCobrar) + ' por cobrar a clientes' : '')));
+      ren2.appendChild(iz2);
+      var v2 = el('div', 'tab-num', pesos(sf.debe));
+      v2.style.fontWeight = '600';
+      ren2.appendChild(v2);
+      ren2.onclick = function () { S.tab = 'franco'; pinta(); };
+      gj.appendChild(ren2);
+    }
+    if (gj.childNodes.length) {
+      p.appendChild(el('div', 'cap', 'Te toca'));
+      p.appendChild(gj);
     }
   }
 
   var nv = el('button', 'b gde', 'Nueva venta');
-  nv.style.width = '100%';
   nv.onclick = function () { S.tab = 'venta'; pinta(); };
   p.appendChild(nv);
 }
@@ -383,16 +472,21 @@ function vVenta(p) {
   p.appendChild(w);
 
   if (S.rol === 'JP') {
-    w.appendChild(grupo('Desde', ['Maleta', 'Casa', 'Franco'], v.de, function (x) {
+    /* Uber no es un lugar donde viva el stock: la pieza sale de la maleta
+       y el chofer solo entrega. Por eso se registra como venta desde
+       Maleta a nombre de Uber, y lo que le pagas va aparte como gasto. */
+    w.appendChild(grupo('Desde', ['Maleta', 'Casa', 'Uber'], v.de, function (x) {
       v.de = x; pinta();
     }));
   } else { v.de = 'Franco'; }
+
+  var salidaReal = v.de === 'Uber' ? 'Maleta' : v.de;
 
   var modelos = [];
   (S.datos.catalogo || []).forEach(function (r) {
     if (modelos.indexOf(r.mo) < 0) modelos.push(r.mo);
   });
-  var campo = v.de === 'Casa' ? 'ca' : (v.de === 'Franco' ? 'fr' : 'ma');
+  var campo = lugarACampo(salidaReal) || 'ma';
 
   var gm = el('div', 'col g8');
   gm.appendChild(el('div', 'eti', 'Modelo'));
@@ -463,7 +557,7 @@ function vVenta(p) {
   if (tope === 2 && v.sas.length === 1) {
     var av2 = el('div', 'mini',
       'Van 2 piezas de ' + v.sas[0] + '. Si el cliente quiere otro sabor, elígelo también.');
-    av2.style.color = 'var(--ac-bright)';
+    av2.style.color = 'var(--warn)';
     w.appendChild(av2);
   }
 
@@ -497,7 +591,7 @@ function vVenta(p) {
     var ft = el('div', 'fila');
     ft.appendChild(el('div', 'sub', 'Total'));
     var tt = el('div', null, pesos(v.mn));
-    tt.style.cssText = 'font-size:26px; font-weight:700; color:var(--ac)';
+    tt.style.cssText = 'font-size:26px; font-weight:700; color:var(--ink)';
     ft.appendChild(tt);
     ct.appendChild(ft);
     w.appendChild(ct);
@@ -537,9 +631,9 @@ function vVenta(p) {
     if (!v.mn) { avisa('Falta el precio'); return; }
     var pr = v.pr === '2x' ? '2x' : (v.pr === 'esp' ? 'Especial' : 'Unidad');
     var base = {
-      t: 'Venta', q: S.rol, mo: v.mo, pr: pr, fp: v.fp,
+      t: 'Venta', q: v.de === 'Uber' ? 'Uber' : S.rol, mo: v.mo, pr: pr, fp: v.fp,
       cl: v.cl || '', en: v.en || 0, no: v.no || '',
-      de: v.de, ha: 'Cliente'
+      de: salidaReal, ha: 'Cliente'
     };
     var efTotal = v.fp === 'Mixto' ? v.ef : (v.fp === 'Efectivo' ? v.mn : 0);
 
@@ -567,6 +661,10 @@ function vVenta(p) {
       avisa('Venta registrada');
     }
 
+    if (v.de === 'Uber' && Number(v.uber) > 0) {
+      encola({ t: 'Gasto', q: 'Uber', mn: Number(v.uber),
+               no: 'Entrega en Uber' + (v.cl ? ' a ' + v.cl : '') });
+    }
     S.venta = { de: v.de, mo: '', sas: [], pr: '1', pz: 1, mn: 0, fp: 'Efectivo', ef: 0 };
     S.tab = 'inicio';
     pinta();
@@ -611,8 +709,9 @@ function vMasDatos() {
   var v = S.venta;
   var c = el('div', 'col g16');
   c.appendChild(el('h1', null, 'Más datos'));
-  [['cl', 'Cliente', 'text'], ['en', 'Envío cobrado', 'tel'], ['no', 'Nota', 'text']]
-    .forEach(function (x) {
+  var campos = [['cl', 'Cliente', 'text'], ['en', 'Envío cobrado', 'tel'], ['no', 'Nota', 'text']];
+  if (v.de === 'Uber') campos.splice(2, 0, ['uber', 'Lo que le pagas al chofer', 'tel']);
+  campos.forEach(function (x) {
       var g = el('div', 'col g8');
       g.appendChild(el('div', 'eti', x[1]));
       var i = el('input', 'campo');
@@ -771,7 +870,7 @@ function vInventario(p) {
         var cm = el('div', 'card ac');
         cm.style.marginBottom = '12px';
         var t = el('div', null, 'Faltan ' + falta.reduce(function (a, b) { return a + b.n; }, 0) + ' piezas');
-        t.style.cssText = 'font-size:15px; font-weight:600; color:var(--ac-bright)';
+        t.style.cssText = 'font-size:15px; font-weight:600; color:var(--warn)';
         cm.appendChild(t);
         cm.appendChild(el('div', 'mini', falta.map(function (x) {
           return x.mo.split(' ')[0] + ' ' + x.mo.split(' ')[1] + ' ' + x.sa + ' ×' + x.n;
@@ -971,10 +1070,10 @@ function vFranco(p) {
   c.style.marginTop = '14px';
   c.appendChild(el('div', 'mini', 'Te debe'));
   var n = el('div', 'num', pesos(sf.debe));
-  n.style.color = 'var(--ac)';
+  n.style.color = 'var(--ink)';
   c.appendChild(n);
   var det = el('div', 'col');
-  det.style.cssText = 'border-top:1px solid var(--line); padding-top:10px';
+  det.style.cssText = 'border-top:.5px solid var(--sep); padding-top:10px';
   [['Piezas vendidas', sf.piezas || 0], ['− Sus comisiones', pesos(sf.comision)],
    ['− Ya te pagó', pesos(sf.pagado)]].forEach(function (x) {
     var f = el('div', 'fila');
@@ -1153,7 +1252,7 @@ function vResultados(p) {
   var w = el('div', 'col');
   filas.forEach(function (x) {
     var box = el('div', 'col g6');
-    box.style.cssText = 'padding:9px 0; border-top:1px solid var(--line)';
+    box.style.cssText = 'padding:9px 0; border-top:.5px solid var(--sep)';
     var f = el('div', 'fila');
     f.appendChild(el('div', null, x.k));
     var der = el('div', 'fila');
@@ -1177,7 +1276,7 @@ function vResultados(p) {
     cf.style.marginTop = '12px';
     var ci = el('div', 'col g6');
     var t = el('div', null, 'Lo que te deja Franco');
-    t.style.cssText = 'font-size:14px; font-weight:600; color:var(--ac-bright)';
+    t.style.cssText = 'font-size:14px; font-weight:600; color:var(--warn)';
     ci.appendChild(t);
     ci.appendChild(el('div', 'mini', 'ya sin su comisión'));
     cf.appendChild(ci);
