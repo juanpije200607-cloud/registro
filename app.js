@@ -8,7 +8,7 @@ var LS = {
 };
 var S = {
   rol: '', datos: null, tab: 'inicio',
-  venta: { de: 'Maleta', mo: '', sa: '', pr: '1', pz: 1, mn: 0, fp: 'Efectivo', ef: 0 },
+  venta: { de: 'Maleta', mo: '', sas: [], pr: '1', pz: 1, mn: 0, fp: 'Efectivo', ef: 0 },
   res: { per: 'semana', dim: 'modelo', data: null }
 };
 
@@ -64,12 +64,23 @@ function encola(mov) {
   sube();
 }
 
-/* Baja el stock en la copia local para que la pantalla responda sin señal */
+/* Mueve el stock en la copia local para que la pantalla responda sin señal.
+   Vale para todos los movimientos, no solo las ventas: si solo moviera
+   ventas, un surtido se registraba pero la pantalla seguía igual y uno
+   acababa apretando el botón dos veces. */
+function lugarACampo(l) {
+  return l === 'Casa' ? 'ca' : (l === 'Maleta' ? 'ma' : (l === 'Franco' ? 'fr' : ''));
+}
 function aplicaLocal(mov) {
-  if (!S.datos || mov.t !== 'Venta') return;
-  var campo = mov.de === 'Casa' ? 'ca' : (mov.de === 'Franco' ? 'fr' : 'ma');
+  if (!S.datos || !S.datos.catalogo) return;
+  var pz = Number(mov.pz) || 0;
+  if (!pz || !mov.mo || !mov.sa) return;
+  var de = lugarACampo(mov.de), ha = lugarACampo(mov.ha);
   S.datos.catalogo.forEach(function (r) {
-    if (r.mo === mov.mo && r.sa === mov.sa) r[campo] = Math.max(0, r[campo] - (mov.pz || 0));
+    if (r.mo !== mov.mo || r.sa !== mov.sa) return;
+    if (mov.t === 'Ajuste') { if (ha) r[ha] = pz; return; }
+    if (de) r[de] = Math.max(0, r[de] - pz);
+    if (ha) r[ha] = r[ha] + pz;
   });
   set(LS.cat, JSON.stringify(S.datos.catalogo));
 }
@@ -208,6 +219,9 @@ function pinta() {
   var p = $('#pantalla');
   p.innerHTML = '';
   p.className = 'tope';
+  /* Solo al cambiar de pestaña: si se reiniciara en cada repintado,
+     elegir un sabor te brincaría al inicio de la pantalla. */
+  if (pinta.ultima !== S.tab) { p.scrollTop = 0; pinta.ultima = S.tab; }
   ({
     inicio: vInicio, venta: vVenta, pend: vPendientes,
     inv: vInventario, franco: vFranco, res: vResultados
@@ -351,7 +365,9 @@ function faltaMaleta() {
   var out = [];
   (S.datos.catalogo || []).forEach(function (r) {
     var m = metaMaleta(r.mo);
-    if (r.ma < m && r.ca > 0) out.push({ mo: r.mo, sa: r.sa, n: Math.min(m - r.ma, r.ca) });
+    if (r.ma < m && r.ca > 0) {
+      out.push({ mo: r.mo, sa: r.sa, n: Math.min(m - r.ma, r.ca), ca: r.ca });
+    }
   });
   return out;
 }
@@ -387,7 +403,7 @@ function vVenta(p) {
     var b = el('button', 'b' + (v.mo === mo ? ' on' : '') + (n ? '' : ' cero'));
     b.appendChild(el('span', null, mo.replace(/ (Blade|Burst|Boost|Optimus|SoPro|Drop|Lush King|Plus)$/, '')));
     b.appendChild(el('span', 'mini', String(n)));
-    b.onclick = function () { v.mo = mo; v.sa = ''; pinta(); };
+    b.onclick = function () { v.mo = mo; v.sas = []; pinta(); };
     rej.appendChild(b);
   });
   gm.appendChild(rej);
@@ -403,6 +419,8 @@ function vVenta(p) {
     b.onclick = function () {
       v.pr = x[0];
       v.pz = x[0] === '2x' ? 2 : (x[0] === 'esp' ? (v.pz || 1) : 1);
+      if (x[0] !== '2x' && v.sas.length > 1) v.sas = [v.sas[0]];
+      calcula();
       pinta();
     };
     seg.appendChild(b);
@@ -412,20 +430,42 @@ function vVenta(p) {
 
   var sabores = (S.datos.catalogo || []).filter(function (r) { return r.mo === v.mo; })
     .sort(function (a, b) { return b[campo] - a[campo]; });
+  var tope = v.pr === '2x' ? 2 : 1;
   var gs = el('div', 'col g6');
-  gs.appendChild(el('div', 'eti', 'Sabor'));
+  gs.appendChild(el('div', 'eti', tope === 2
+    ? 'Sabores · elige 2, o uno solo si van los dos iguales'
+    : 'Sabor'));
   var li = el('div', 'col g6 lista');
   sabores.forEach(function (r) {
-    var b = el('button', 'b' + (v.sa === r.sa ? ' on' : '') + (r[campo] ? '' : ' cero'));
+    var veces = v.sas.filter(function (x) { return x === r.sa; }).length;
+    var b = el('button', 'b' + (veces ? ' on' : '') + (r[campo] ? '' : ' cero'));
     b.appendChild(el('span', null, r.sa));
-    b.appendChild(el('span', 'mini', r[campo] ? String(r[campo]) : 'agotado'));
-    b.onclick = function () { v.sa = r.sa; calcula(); pinta(); };
+    var der = el('span', 'mini', r[campo] ? String(r[campo]) : 'agotado');
+    if (veces && tope === 2) der.textContent = 'elegido · ' + (r[campo] || 0);
+    b.appendChild(der);
+    b.onclick = function () {
+      if (veces) {
+        v.sas = v.sas.filter(function (x) { return x !== r.sa; });
+      } else if (v.sas.length < tope) {
+        v.sas.push(r.sa);
+      } else {
+        v.sas = [r.sa];
+      }
+      calcula();
+      pinta();
+    };
     li.appendChild(b);
   });
   gs.appendChild(li);
   w.appendChild(gs);
 
-  if (!v.sa) return;
+  if (!v.sas.length) return;
+  if (tope === 2 && v.sas.length === 1) {
+    var av2 = el('div', 'mini',
+      'Van 2 piezas de ' + v.sas[0] + '. Si el cliente quiere otro sabor, elígelo también.');
+    av2.style.color = 'var(--ac-bright)';
+    w.appendChild(av2);
+  }
 
   if (v.pr === 'esp') {
     var ge = el('div', 'card ac col g16');
@@ -489,15 +529,39 @@ function vVenta(p) {
   reg.disabled = !v.mn && v.fp !== 'Pendiente';
   reg.onclick = function () {
     if (!v.mn) { avisa('Falta el precio'); return; }
-    encola({
-      t: 'Venta', q: S.rol, mo: v.mo, sa: v.sa,
-      pr: v.pr === '2x' ? '2x' : (v.pr === 'esp' ? 'Especial' : 'Unidad'),
-      pz: v.pz, mn: v.mn, fp: v.fp, ef: v.fp === 'Mixto' ? v.ef : (v.fp === 'Efectivo' ? v.mn : 0),
+    var pr = v.pr === '2x' ? '2x' : (v.pr === 'esp' ? 'Especial' : 'Unidad');
+    var base = {
+      t: 'Venta', q: S.rol, mo: v.mo, pr: pr, fp: v.fp,
       cl: v.cl || '', en: v.en || 0, no: v.no || '',
       de: v.de, ha: 'Cliente'
-    });
-    avisa('Venta registrada');
-    S.venta = { de: v.de, mo: '', sa: '', pr: '1', pz: 1, mn: 0, fp: 'Efectivo', ef: 0 };
+    };
+    var efTotal = v.fp === 'Mixto' ? v.ef : (v.fp === 'Efectivo' ? v.mn : 0);
+
+    if (v.pr === '2x' && v.sas.length === 2) {
+      /* Dos sabores en el mismo 2x: una fila por sabor, con el precio
+         partido a la mitad. Así el inventario baja de los dos, la comisión
+         suma lo mismo que un 2x normal, y ninguno de los dos sabores
+         aparece en Resultados con una utilidad falsa. */
+      var mitad = Math.round(v.mn / 2);
+      var resto = v.mn - mitad;
+      var ef1 = Math.min(efTotal, mitad);
+      [[v.sas[0], mitad, ef1], [v.sas[1], resto, efTotal - ef1]].forEach(function (x, i) {
+        var m = {};
+        Object.keys(base).forEach(function (k) { m[k] = base[k]; });
+        m.sa = x[0]; m.pz = 1; m.mn = x[1]; m.ef = x[2];
+        m.no = (base.no ? base.no + ' · ' : '') + '2x de dos sabores';
+        encola(m);
+      });
+      avisa('Venta registrada, los dos sabores');
+    } else {
+      var m2 = {};
+      Object.keys(base).forEach(function (k) { m2[k] = base[k]; });
+      m2.sa = v.sas[0]; m2.pz = v.pz; m2.mn = v.mn; m2.ef = efTotal;
+      encola(m2);
+      avisa('Venta registrada');
+    }
+
+    S.venta = { de: v.de, mo: '', sas: [], pr: '1', pz: 1, mn: 0, fp: 'Efectivo', ef: 0 };
     S.tab = 'inicio';
     pinta();
   };
@@ -507,7 +571,7 @@ function vVenta(p) {
 function precioLista() {
   var v = S.venta;
   var r = (S.datos.catalogo || []).filter(function (x) {
-    return x.mo === v.mo && x.sa === v.sa;
+    return x.mo === v.mo && x.sa === (v.sas[0] || '');
   })[0];
   if (!r) return 0;
   if (v.pr === '2x') return r.p2;
@@ -705,15 +769,9 @@ function vInventario(p) {
         cm.appendChild(el('div', 'mini', falta.map(function (x) {
           return x.mo.split(' ')[0] + ' ' + x.mo.split(' ')[1] + ' ' + x.sa + ' ×' + x.n;
         }).join(' · ')));
-        var b = el('button', 'b gde', 'Pasar a la maleta');
+        var b = el('button', 'b gde', 'Rellenar la maleta');
         b.style.cssText = 'width:100%; margin-top:10px; min-height:44px; font-size:14px';
-        b.onclick = function () {
-          falta.forEach(function (x) {
-            encola({ t: 'Surtido', q: 'JP', mo: x.mo, sa: x.sa, pz: x.n, de: 'Casa', ha: 'Maleta' });
-          });
-          avisa('Maleta rellenada');
-          pinta();
-        };
+        b.onclick = rellenarMaleta;
         cm.appendChild(b);
         p.appendChild(cm);
       }
@@ -803,6 +861,11 @@ function vMovimiento(tipo) {
       c.appendChild(ss);
     }
 
+    if (tipo === 'Ajuste') {
+      c.appendChild(grupo('En qué lugar contaste', ['Casa', 'Maleta', 'Franco'], d.ha,
+        function (x) { d.ha = x; hoja(null); dibuja(); }));
+    }
+
     var g = el('div', 'col g8');
     g.appendChild(el('div', 'eti', tipo === 'Ajuste' ? 'Piezas que contaste' : 'Piezas que llegaron'));
     var i = el('input', 'campo');
@@ -826,14 +889,67 @@ function vMovimiento(tipo) {
       if (!d.mo || !d.sa) { avisa('Falta modelo o sabor'); return; }
       encola({
         t: tipo, q: 'JP', mo: d.mo, sa: d.sa, pz: d.pz, mn: d.mn,
-        de: tipo === 'Ajuste' ? '' : 'Proveedor', ha: 'Casa',
-        no: tipo === 'Ajuste' ? 'Ajuste por conteo' : ''
+        de: tipo === 'Ajuste' ? '' : 'Proveedor', ha: d.ha,
+        no: tipo === 'Ajuste' ? 'Ajuste por conteo en ' + d.ha : ''
       });
       hoja(null); avisa('Registrado'); baja(true);
     };
     c.appendChild(b);
     hoja(c);
   }
+  dibuja();
+}
+
+/* La app propone, JP confirma pieza por pieza: nada se mueve sin que él
+   diga qué sí metió a la maleta y qué no. */
+function rellenarMaleta() {
+  var falta = faltaMaleta();
+  var sel = {};
+  falta.forEach(function (x) { sel[x.mo + '|' + x.sa] = x.n; });
+
+  function dibuja() {
+    var c = el('div', 'col g12');
+    c.appendChild(el('h1', null, 'Rellenar la maleta'));
+    c.appendChild(el('div', 'mini',
+      'Ya traen la cantidad que falta. Bájale o súbele a lo que de verdad metiste.'));
+    var cuerpo = el('div', 'col g6');
+    cuerpo.style.cssText = 'max-height:48vh; overflow-y:auto';
+    falta.forEach(function (x) {
+      var k = x.mo + '|' + x.sa;
+      var ren = el('div', 'ren');
+      var izq = el('div', 'col');
+      izq.appendChild(el('div', null, x.sa));
+      izq.appendChild(el('div', 'mini', x.mo + ' · ' + x.ca + ' en casa'));
+      ren.appendChild(izq);
+      var f = el('div', 'fila');
+      f.style.gap = '8px';
+      var menos = el('button', 'b chico', '−'); menos.style.minWidth = '38px';
+      var num = el('div', null, String(sel[k]));
+      num.style.cssText = 'min-width:22px; text-align:center; font-weight:600';
+      var mas = el('button', 'b chico', '+'); mas.style.minWidth = '38px';
+      menos.onclick = function () { sel[k] = Math.max(0, sel[k] - 1); hoja(null); dibuja(); };
+      mas.onclick = function () { sel[k] = Math.min(x.ca, sel[k] + 1); hoja(null); dibuja(); };
+      f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
+      ren.appendChild(f);
+      cuerpo.appendChild(ren);
+    });
+    c.appendChild(cuerpo);
+
+    var n = Object.keys(sel).reduce(function (a, k) { return a + sel[k]; }, 0);
+    var b = el('button', 'b gde', n ? 'Pasé ' + n + ' piezas a la maleta' : 'No metí nada');
+    b.disabled = !n;
+    b.onclick = function () {
+      Object.keys(sel).forEach(function (k) {
+        if (!sel[k]) return;
+        var pz = k.split('|');
+        encola({ t: 'Surtido', q: 'JP', mo: pz[0], sa: pz[1], pz: sel[k], de: 'Casa', ha: 'Maleta' });
+      });
+      hoja(null); avisa('Maleta actualizada'); pinta();
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  if (!falta.length) { avisa('La maleta está completa'); return; }
   dibuja();
 }
 
