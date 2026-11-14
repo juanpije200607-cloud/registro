@@ -503,9 +503,15 @@ function vVenta(p) {
     w.appendChild(ct);
   }
 
-  w.appendChild(grupo('Cómo paga', ['Efectivo', 'Nu', 'Mixto', 'Pendiente'], v.fp, function (x) {
+  /* Para Franco importa a quién le llegó la transferencia: si fue a JP,
+     Franco no debe ese dinero. Antes todo contaba como suyo. */
+  var formas = S.rol === 'Franco'
+    ? ['Efectivo', 'Nu', 'Transferencia a Franco', 'Mixto', 'Pendiente']
+    : ['Efectivo', 'Nu', 'Mixto', 'Pendiente'];
+  var nombres = { 'Nu': 'Transfer a JP', 'Transferencia a Franco': 'Transfer a mí', 'Pendiente': 'Debe' };
+  w.appendChild(grupo('Cómo paga', formas, v.fp, function (x) {
     v.fp = x; pinta();
-  }));
+  }, nombres));
 
   if (v.fp === 'Mixto') {
     var gmx = el('div', 'col g8');
@@ -585,14 +591,15 @@ function calcula() {
   v.pz = v.pr === '2x' ? 2 : 1;
 }
 
-function grupo(titulo, ops, sel, cb) {
+function grupo(titulo, ops, sel, cb, nombres) {
   var g = el('div', 'col g8');
   g.appendChild(el('div', 'eti', titulo));
   var f = el('div', 'fila g6');
-  f.style.gap = '6px';
+  f.style.cssText = 'gap:6px; flex-wrap:wrap';
   ops.forEach(function (o) {
-    var b = el('button', 'b chico' + (sel === o ? ' on' : ''), o);
-    b.style.flex = '1';
+    var b = el('button', 'b chico' + (sel === o ? ' on' : ''),
+      (nombres && nombres[o]) ? nombres[o] : o);
+    b.style.cssText = 'flex:1 1 auto; min-width:72px';
     b.onclick = function () { cb(o); };
     f.appendChild(b);
   });
