@@ -404,9 +404,9 @@ function vInicio(p) {
 
   /* últimos movimientos del día */
   if ((h.ultimas || []).length) {
-    p.appendChild(el('div', 'cap', 'Lo último de hoy'));
+    p.appendChild(el('div', 'cap', esJP ? 'Lo último de hoy' : 'Tus ventas de hoy'));
     var gu = el('div', 'group');
-    h.ultimas.slice(0, 5).forEach(function (u) {
+    h.ultimas.slice(0, esJP ? 5 : 8).forEach(function (u) {
       var ren = el('div', 'ren');
       var iz = el('div', 'col');
       iz.appendChild(el('div', null, (u.pr === '2x' ? '2× ' : '') +
@@ -592,10 +592,32 @@ function vVenta(p) {
 
   var sabores = (S.datos.catalogo || []).filter(function (r) { return r.mo === v.mo; })
     .sort(function (a, b) { return b[campo] - a[campo]; });
-  var tope = v.pr === '2x' ? 2 : 1;
+
+  /* Cuántos sabores caben: 1 en unidad, 2 en el 2x, y en la especial
+     tantos como piezas lleve la venta. Se puede repetir el mismo. */
+  if (v.pr === 'esp') {
+    var gpz = el('div', 'col g8');
+    gpz.appendChild(el('div', 'eti', 'Cuántas piezas'));
+    var fpz = el('div', 'fila');
+    var menos = el('button', 'b', '−'); menos.style.minWidth = '58px';
+    var cuenta = el('div', 'num', String(v.pz));
+    cuenta.style.cssText = 'flex:1; text-align:center';
+    var mas = el('button', 'b on', '+'); mas.style.minWidth = '58px';
+    menos.onclick = function () {
+      v.pz = Math.max(1, v.pz - 1);
+      if (v.sas.length > v.pz) v.sas = v.sas.slice(0, v.pz);
+      pinta();
+    };
+    mas.onclick = function () { v.pz = v.pz + 1; pinta(); };
+    fpz.appendChild(menos); fpz.appendChild(cuenta); fpz.appendChild(mas);
+    gpz.appendChild(fpz);
+    w.appendChild(gpz);
+  }
+
+  var tope = v.pr === '2x' ? 2 : (v.pr === 'esp' ? v.pz : 1);
   var gs = el('div', 'col g6');
-  gs.appendChild(el('div', 'eti', tope === 2
-    ? 'Sabores · elige 2, o uno solo si van los dos iguales'
+  gs.appendChild(el('div', 'eti', tope > 1
+    ? 'Sabores · toca uno por pieza, repite si van iguales'
     : 'Sabor'));
   var li = el('div', 'col g6 lista');
   sabores.forEach(function (r) {
@@ -603,16 +625,12 @@ function vVenta(p) {
     var b = el('button', 'b' + (veces ? ' on' : '') + (r[campo] ? '' : ' cero'));
     b.appendChild(el('span', null, r.sa));
     var der = el('span', 'mini', r[campo] ? String(r[campo]) : 'agotado');
-    if (veces && tope === 2) der.textContent = 'elegido · ' + (r[campo] || 0);
+    if (veces) der.textContent = '×' + veces + ' · quedan ' + (r[campo] || 0);
     b.appendChild(der);
     b.onclick = function () {
-      if (veces) {
-        v.sas = v.sas.filter(function (x) { return x !== r.sa; });
-      } else if (v.sas.length < tope) {
-        v.sas.push(r.sa);
-      } else {
-        v.sas = [r.sa];
-      }
+      if (tope === 1) { v.sas = [r.sa]; }
+      else if (v.sas.length < tope) { v.sas.push(r.sa); }
+      else { avisa('Ya elegiste ' + tope + '. Quítale a alguno abajo.'); return; }
       calcula();
       pinta();
     };
@@ -622,27 +640,38 @@ function vVenta(p) {
   w.appendChild(gs);
 
   if (!v.sas.length) return;
-  if (tope === 2 && v.sas.length === 1) {
-    var av2 = el('div', 'mini',
-      'Van 2 piezas de ' + v.sas[0] + '. Si el cliente quiere otro sabor, elígelo también.');
-    av2.style.color = 'var(--warn)';
-    w.appendChild(av2);
+
+  /* los elegidos, para poder quitar sin adivinar */
+  if (tope > 1) {
+    w.appendChild(el('div', 'cap', 'Van en esta venta · ' + v.sas.length + ' de ' + tope));
+    var ge2 = el('div', 'group');
+    agrupaSabores(v.sas).forEach(function (gr) {
+      var ren = el('div', 'ren');
+      var iz = el('div', 'col');
+      iz.appendChild(el('div', null, gr.sa));
+      iz.appendChild(el('div', 'mini', gr.n + (gr.n === 1 ? ' pieza' : ' piezas')));
+      ren.appendChild(iz);
+      var q = el('button', 'b chico', 'Quitar');
+      q.onclick = function () {
+        var i = v.sas.lastIndexOf(gr.sa);
+        if (i >= 0) v.sas.splice(i, 1);
+        calcula(); pinta();
+      };
+      ren.appendChild(q);
+      ge2.appendChild(ren);
+    });
+    w.appendChild(ge2);
+    if (v.sas.length < tope) {
+      var av2 = el('div', 'mini alerta');
+      av2.textContent = v.pr === '2x'
+        ? 'Si las dos piezas son del mismo sabor, así déjalo.'
+        : 'Faltan ' + (tope - v.sas.length) + ' por elegir, o bájale a las piezas.';
+      w.appendChild(av2);
+    }
   }
 
   if (v.pr === 'esp') {
-    var ge = el('div', 'card ac col g16');
-    var gpz = el('div', 'col g8');
-    gpz.appendChild(el('div', 'eti', 'Piezas'));
-    var fpz = el('div', 'fila');
-    var menos = el('button', 'b', '−'); menos.style.minWidth = '56px';
-    var cuenta = el('div', 'num', String(v.pz));
-    var mas = el('button', 'b on', '+'); mas.style.minWidth = '56px';
-    menos.onclick = function () { v.pz = Math.max(1, v.pz - 1); pinta(); };
-    mas.onclick = function () { v.pz = v.pz + 1; pinta(); };
-    fpz.appendChild(menos); fpz.appendChild(cuenta); fpz.appendChild(mas);
-    gpz.appendChild(fpz);
-    ge.appendChild(gpz);
-
+    var ge = el('div', 'card');
     var gpr = el('div', 'col g8');
     gpr.appendChild(el('div', 'eti', 'Precio total de la venta'));
     var inp = el('input', 'campo');
@@ -650,27 +679,25 @@ function vVenta(p) {
     inp.oninput = function () { v.mn = Number(inp.value) || 0; };
     gpr.appendChild(inp);
     var lista = precioLista();
-    gpr.appendChild(el('div', 'mini', 'Precio de lista por ' + v.pz + ': ' + pesos(lista)));
+    var dif = lista - (v.mn || 0);
+    gpr.appendChild(el('div', 'mini', 'Precio de lista por ' + v.pz +
+      (v.pz === 1 ? ' pieza' : ' piezas') + ': ' + pesos(lista) +
+      (v.mn && dif > 0 ? ' · le bajas ' + pesos(dif) : '') +
+      (v.mn && dif < 0 ? ' · le subes ' + pesos(-dif) : '')));
     ge.appendChild(gpr);
     w.appendChild(ge);
   } else {
     calcula();
     var ct = el('div', 'card');
     var ft = el('div', 'fila');
-    ft.appendChild(el('div', 'sub', 'Total'));
+    ft.appendChild(el('div', 'mini', 'Total'));
     var tt = el('div', null, pesos(v.mn));
-    tt.style.cssText = 'font-size:26px; font-weight:700; color:var(--ink)';
+    tt.style.cssText = 'font:700 26px var(--f-d)';
     ft.appendChild(tt);
     ct.appendChild(ft);
     w.appendChild(ct);
   }
 
-  /* Para Franco importa a quién le llegó la transferencia: si fue a JP,
-     Franco no debe ese dinero. Antes todo contaba como suyo. */
-  var formas = S.rol === 'Franco'
-    ? ['Efectivo', 'Nu', 'Transferencia a Franco', 'Mixto', 'Pendiente']
-    : ['Efectivo', 'Nu', 'Mixto', 'Pendiente'];
-  var nombres = { 'Nu': 'Transfer a JP', 'Transferencia a Franco': 'Transfer a mí', 'Pendiente': 'Debe' };
   w.appendChild(grupo('Cómo paga', formas, v.fp, function (x) {
     v.fp = x; pinta();
   }, nombres));
@@ -697,47 +724,64 @@ function vVenta(p) {
   reg.disabled = !v.mn && v.fp !== 'Pendiente';
   reg.onclick = function () {
     if (!v.mn) { avisa('Falta el precio'); return; }
+    if (v.sas.length < 1) { avisa('Falta el sabor'); return; }
     var pr = v.pr === '2x' ? '2x' : (v.pr === 'esp' ? 'Especial' : 'Unidad');
-    var base = {
-      t: 'Venta', q: v.de === 'Uber' ? 'Uber' : S.rol, mo: v.mo, pr: pr, fp: v.fp,
-      cl: v.cl || '', en: v.en || 0, no: v.no || '',
-      de: salidaReal, ha: 'Cliente'
-    };
-    var efTotal = v.fp === 'Mixto' ? v.ef : (v.fp === 'Efectivo' ? v.mn : 0);
+    var grupos = agrupaSabores(v.sas);
+    var piezasTotal = v.pr === '2x' ? 2 : (v.pr === 'esp' ? v.pz : 1);
+    /* Si eligió menos sabores que piezas, las que faltan van del primero. */
+    if (grupos.length === 1) grupos[0].n = piezasTotal;
 
-    if (v.pr === '2x' && v.sas.length === 2) {
-      /* Dos sabores en el mismo 2x: una fila por sabor, con el precio
-         partido a la mitad. Así el inventario baja de los dos, la comisión
-         suma lo mismo que un 2x normal, y ninguno de los dos sabores
-         aparece en Resultados con una utilidad falsa. */
-      var mitad = Math.round(v.mn / 2);
-      var resto = v.mn - mitad;
-      var ef1 = Math.min(efTotal, mitad);
-      [[v.sas[0], mitad, ef1], [v.sas[1], resto, efTotal - ef1]].forEach(function (x, i) {
-        var m = {};
-        Object.keys(base).forEach(function (k) { m[k] = base[k]; });
-        m.sa = x[0]; m.pz = 1; m.mn = x[1]; m.ef = x[2];
-        m.no = (base.no ? base.no + ' · ' : '') + '2x de dos sabores';
-        encola(m);
-      });
-      avisa('Venta registrada, los dos sabores');
-    } else {
-      var m2 = {};
-      Object.keys(base).forEach(function (k) { m2[k] = base[k]; });
-      m2.sa = v.sas[0]; m2.pz = v.pz; m2.mn = v.mn; m2.ef = efTotal;
-      encola(m2);
-      avisa('Venta registrada');
+    var nota = v.no || '';
+    if (v.pr === 'esp') {
+      var lista = precioLista();
+      if (lista && lista !== v.mn) {
+        nota = (nota ? nota + ' · ' : '') + 'precio especial, lista ' + pesos(lista);
+      }
     }
+    if (grupos.length > 1) {
+      nota = (nota ? nota + ' · ' : '') + pr + ' de ' + grupos.length + ' sabores';
+    }
+
+    var efTotal = v.fp === 'Mixto' ? v.ef : (v.fp === 'Efectivo' ? v.mn : 0);
+    var suma = grupos.reduce(function (a, g) { return a + g.n; }, 0) || 1;
+    var montoRepartido = 0, efRepartido = 0;
+
+    grupos.forEach(function (g, i) {
+      var ultimo = i === grupos.length - 1;
+      /* El último se lleva el redondeo, así los pesos cuadran exactos. */
+      var mn = ultimo ? (v.mn - montoRepartido) : Math.round(v.mn * g.n / suma);
+      var ef = ultimo ? (efTotal - efRepartido) : Math.round(efTotal * g.n / suma);
+      montoRepartido += mn; efRepartido += ef;
+      encola({
+        t: 'Venta', q: v.de === 'Uber' ? 'Uber' : S.rol, mo: v.mo, sa: g.sa, pr: pr,
+        pz: g.n, mn: mn, ef: ef, fp: v.fp,
+        cl: v.cl || '', en: i === 0 ? (v.en || 0) : 0, no: nota,
+        de: salidaReal, ha: 'Cliente'
+      });
+    });
 
     if (v.de === 'Uber' && Number(v.uber) > 0) {
       encola({ t: 'Gasto', q: 'Uber', mn: Number(v.uber),
                no: 'Entrega en Uber' + (v.cl ? ' a ' + v.cl : '') });
     }
+
+    avisa(grupos.length > 1 ? 'Venta registrada, ' + grupos.length + ' sabores'
+                            : 'Venta registrada');
     S.venta = { de: v.de, mo: '', sas: [], pr: '1', pz: 1, mn: 0, fp: 'Efectivo', ef: 0 };
     S.tab = 'inicio';
     pinta();
   };
   w.appendChild(reg);
+}
+
+/* Agrupa ['A','B','A'] en [{sa:'A',n:2},{sa:'B',n:1}] */
+function agrupaSabores(lista) {
+  var orden = [], m = {};
+  lista.forEach(function (x) {
+    if (!m[x]) { m[x] = { sa: x, n: 0 }; orden.push(m[x]); }
+    m[x].n++;
+  });
+  return orden;
 }
 
 function precioLista() {
