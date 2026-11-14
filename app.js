@@ -698,6 +698,16 @@ function vVenta(p) {
     w.appendChild(ct);
   }
 
+  /* Para Franco importa a quién le llegó la transferencia: si fue a JP,
+     Franco no debe ese dinero. */
+  var formas = S.rol === 'Franco'
+    ? ['Efectivo', 'Nu', 'Transferencia a Franco', 'Mixto', 'Pendiente']
+    : ['Efectivo', 'Nu', 'Mixto', 'Pendiente'];
+  var nombres = {
+    'Nu': S.rol === 'Franco' ? 'Transfer a JP' : 'Transfer',
+    'Transferencia a Franco': 'Transfer a mí',
+    'Pendiente': 'Debe'
+  };
   w.appendChild(grupo('Cómo paga', formas, v.fp, function (x) {
     v.fp = x; pinta();
   }, nombres));
