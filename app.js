@@ -8,8 +8,8 @@ var LS = {
 };
 var S = {
   rol: '', datos: null, tab: 'inicio',
-  venta: { de: 'Maleta', mo: '', sas: [], pr: '1', pz: 1, mn: 0, fp: 'Efectivo', ef: 0 },
-  res: { per: 'semana', dim: 'modelo', data: null }
+  venta: { de: 'Maleta', mo: '', sas: [], pr: '1', pz: 1, mn: 0, fp: 'Efectivo', ef: 0, d: '' },
+  res: { per: 'dia', dim: 'modelo', data: null, dia: '' }
 };
 
 var $ = function (s) { return document.querySelector(s); };
@@ -32,6 +32,12 @@ var hoyISO = function () {
 var horaLocal = function () {
   var d = new Date();
   return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+};
+var fechaBonita = function (iso) {
+  var p = String(iso || '').split('-');
+  if (p.length !== 3) return String(iso || '');
+  var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  return d.toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' });
 };
 var folio = function () {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
@@ -58,7 +64,9 @@ function guardaCola(c) { set(LS.cola, JSON.stringify(c)); }
 
 function encola(mov) {
   mov.f = mov.f || folio();
-  mov.d = hoyISO(); mov.h = horaLocal();
+  /* Si el movimiento ya trae fecha (una venta de otro día), se respeta. */
+  mov.d = mov.d || hoyISO();
+  mov.h = mov.h || horaLocal();
   var c = cola(); c.push(mov); guardaCola(c);
   aplicaLocal(mov);
   sube();
@@ -142,16 +150,20 @@ function baja(silencio) {
 }
 
 function bajaResultados() {
-  var d = new Date(), desde = new Date(d);
-  if (S.res.per === 'hoy') desde = d;
-  else if (S.res.per === 'semana') desde.setDate(d.getDate() - 6);
-  else desde.setDate(d.getDate() - 29);
   var iso = function (x) {
     return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' +
       String(x.getDate()).padStart(2, '0');
   };
+  var desdeISO, hastaISO;
+  if (S.res.per === 'dia') {
+    desdeISO = hastaISO = (S.res.dia || hoyISO());
+  } else {
+    var d = new Date(), desde = new Date(d);
+    desde.setDate(d.getDate() - (S.res.per === 'semana' ? 6 : 29));
+    desdeISO = iso(desde); hastaISO = hoyISO();
+  }
   fetch(get(LS.url) + '?action=resultados&pin=' + encodeURIComponent(get(LS.pin)) +
-    '&desde=' + iso(desde) + '&hasta=' + hoyISO())
+    '&desde=' + desdeISO + '&hasta=' + hastaISO)
     .then(function (r) { return r.json(); })
     .then(function (j) { if (j && j.ok) { S.res.data = j; pinta(); } })
     .catch(function () { avisa('No se pudieron traer los resultados'); });
@@ -539,6 +551,32 @@ function vVenta(p) {
   w.style.marginTop = '14px';
   p.appendChild(w);
 
+  /* Día de la venta. Por defecto hoy; si es otro, se ve fuerte para que
+     nadie capture a un día equivocado sin darse cuenta. */
+  var dVenta = v.d || hoyISO();
+  var esHoy = dVenta === hoyISO();
+  var gd = el('div', esHoy ? 'fila' : 'card');
+  var etq = el('div', esHoy ? 'mini' : null, esHoy
+    ? 'Venta de hoy'
+    : 'Venta del ' + fechaBonita(dVenta));
+  if (!esHoy) etq.className = 'alerta';
+  gd.appendChild(etq);
+  var fdia = el('div', 'fila');
+  fdia.style.gap = '6px';
+  var inpD = el('input');
+  inpD.type = 'date'; inpD.value = dVenta; inpD.max = hoyISO();
+  inpD.className = 'b chico';
+  inpD.style.cssText = 'min-width:132px; padding:8px 10px';
+  inpD.onchange = function () { v.d = inpD.value || hoyISO(); pinta(); };
+  fdia.appendChild(inpD);
+  if (!esHoy) {
+    var bh = el('button', 'b chico', 'Volver a hoy');
+    bh.onclick = function () { v.d = ''; pinta(); };
+    fdia.appendChild(bh);
+  }
+  gd.appendChild(fdia);
+  w.appendChild(gd);
+
   if (S.rol === 'JP') {
     /* Uber no es un lugar donde viva el stock: la pieza sale de la maleta
        y el chofer solo entrega. Por eso se registra como venta desde
@@ -729,7 +767,8 @@ function vVenta(p) {
   extra.appendChild(mas2);
   w.appendChild(extra);
 
-  var reg = el('button', 'b gde', 'Registrar venta');
+  var reg = el('button', 'b gde', esHoy ? 'Registrar venta'
+    : 'Registrar venta del ' + fechaBonita(dVenta));
   reg.style.cssText = 'width:100%; margin-top:4px';
   reg.disabled = !v.mn && v.fp !== 'Pendiente';
   reg.onclick = function () {
@@ -751,6 +790,9 @@ function vVenta(p) {
     if (grupos.length > 1) {
       nota = (nota ? nota + ' · ' : '') + pr + ' de ' + grupos.length + ' sabores';
     }
+    if (!esHoy) {
+      nota = (nota ? nota + ' · ' : '') + 'capturada el ' + fechaBonita(hoyISO());
+    }
 
     var efTotal = v.fp === 'Mixto' ? v.ef : (v.fp === 'Efectivo' ? v.mn : 0);
     var suma = grupos.reduce(function (a, g) { return a + g.n; }, 0) || 1;
@@ -764,7 +806,7 @@ function vVenta(p) {
       montoRepartido += mn; efRepartido += ef;
       encola({
         t: 'Venta', q: v.de === 'Uber' ? 'Uber' : S.rol, mo: v.mo, sa: g.sa, pr: pr,
-        pz: g.n, mn: mn, ef: ef, fp: v.fp,
+        d: dVenta, pz: g.n, mn: mn, ef: ef, fp: v.fp,
         cl: v.cl || '', en: i === 0 ? (v.en || 0) : 0, no: nota,
         de: salidaReal, ha: 'Cliente'
       });
@@ -777,7 +819,8 @@ function vVenta(p) {
 
     avisa(grupos.length > 1 ? 'Venta registrada, ' + grupos.length + ' sabores'
                             : 'Venta registrada');
-    S.venta = { de: v.de, mo: '', sas: [], pr: '1', pz: 1, mn: 0, fp: 'Efectivo', ef: 0 };
+    S.venta = { de: v.de, mo: '', sas: [], pr: '1', pz: 1, mn: 0,
+                fp: 'Efectivo', ef: 0, d: esHoy ? '' : dVenta };
     S.tab = 'inicio';
     pinta();
   };
@@ -1333,18 +1376,58 @@ function vResultados(p) {
   p.appendChild(el('h1', null, 'Resultados'));
   var seg = el('div', 'seg');
   seg.style.margin = '12px 0';
-  [['hoy', 'Hoy'], ['semana', 'Semana'], ['mes', 'Mes']].forEach(function (o) {
+  [['dia', 'Un día'], ['semana', 'Semana'], ['mes', 'Mes']].forEach(function (o) {
     var b = el('button', S.res.per === o[0] ? 'on' : '', o[1]);
-    b.onclick = function () { S.res.per = o[0]; S.res.data = null; pinta(); bajaResultados(); };
+    b.onclick = function () {
+      S.res.per = o[0]; S.res.data = null;
+      if (o[0] === 'dia' && !S.res.dia) S.res.dia = hoyISO();
+      pinta(); bajaResultados();
+    };
     seg.appendChild(b);
   });
   p.appendChild(seg);
+
+  /* Navegar días: flechas y calendario, como en la app anterior. */
+  if (S.res.per === 'dia') {
+    var dia = S.res.dia || hoyISO();
+    var mueve = function (n) {
+      var pz = dia.split('-');
+      var x = new Date(Number(pz[0]), Number(pz[1]) - 1, Number(pz[2]));
+      x.setDate(x.getDate() + n);
+      var nuevo = x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' +
+        String(x.getDate()).padStart(2, '0');
+      if (nuevo > hoyISO()) return;
+      S.res.dia = nuevo; S.res.data = null; pinta(); bajaResultados();
+    };
+    var nav = el('div', 'fila');
+    nav.style.gap = '8px';
+    var bA = el('button', 'b chico', '‹');
+    bA.style.minWidth = '46px';
+    bA.onclick = function () { mueve(-1); };
+    var ip = el('input');
+    ip.type = 'date'; ip.value = dia; ip.max = hoyISO();
+    ip.className = 'b chico';
+    ip.style.cssText = 'flex:1; min-width:0; padding:9px 10px';
+    ip.onchange = function () {
+      S.res.dia = ip.value || hoyISO(); S.res.data = null; pinta(); bajaResultados();
+    };
+    var bS = el('button', 'b chico', '›');
+    bS.style.minWidth = '46px';
+    bS.disabled = dia >= hoyISO();
+    bS.onclick = function () { mueve(1); };
+    nav.appendChild(bA); nav.appendChild(ip); nav.appendChild(bS);
+    p.appendChild(nav);
+    var titulo = el('div', 'cap', dia === hoyISO() ? 'Hoy' : fechaBonita(dia));
+    p.appendChild(titulo);
+  }
 
   var d = S.res.data;
   if (!d) { p.appendChild(el('div', 'sub', 'Trayendo los números…')); return; }
 
   var cab = el('div', 'col g6');
-  cab.appendChild(el('div', 'mini', S.rol === 'JP' ? 'Utilidad del periodo' : 'Vendido en el periodo'));
+  cab.appendChild(el('div', 'mini', (S.rol === 'JP' ? 'Utilidad' : 'Vendido') +
+    (S.res.per === 'dia' ? ' de ese día'
+      : (S.res.per === 'semana' ? ' de los últimos 7 días' : ' de los últimos 30 días'))));
   var n = el('div', 'num', pesos(S.rol === 'JP' ? d.utilidad : d.ingresos));
   n.style.fontSize = '40px';
   cab.appendChild(n);
@@ -1379,6 +1462,24 @@ function vResultados(p) {
     });
     cg.appendChild(bars);
     p.appendChild(cg);
+  }
+
+  if (S.res.per === 'dia' && (d.ultimas || []).length) {
+    p.appendChild(el('div', 'cap', 'Ventas de ese día'));
+    var gd2 = el('div', 'group');
+    d.ultimas.forEach(function (u) {
+      var ren = el('div', 'ren');
+      var iz = el('div', 'col');
+      iz.appendChild(el('div', null, (u.pr === '2x' ? '2× ' : '') +
+        u.modelo.split(' ').slice(0, 2).join(' ') + ' · ' + u.sabor));
+      iz.appendChild(el('div', 'mini', u.hora +
+        (S.rol === 'JP' && u.quien !== 'JP' ? ' · ' + u.quien : '') +
+        (u.fp === 'Pendiente' ? ' · debe' : '')));
+      ren.appendChild(iz);
+      ren.appendChild(el('div', 'tab-num', pesos(u.monto)));
+      gd2.appendChild(ren);
+    });
+    p.appendChild(gd2);
   }
 
   var dims = (S.rol === 'JP')
