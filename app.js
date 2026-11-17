@@ -76,8 +76,20 @@ function encola(mov) {
    Vale para todos los movimientos, no solo las ventas: si solo moviera
    ventas, un surtido se registraba pero la pantalla seguía igual y uno
    acababa apretando el botón dos veces. */
+/* Cuatro lugares. Franco tiene su casa y su maleta igual que JP: su meta
+   es de su maleta, y rellenarla desde su casa es su movimiento diario. */
 function lugarACampo(l) {
-  return l === 'Casa' ? 'ca' : (l === 'Maleta' ? 'ma' : (l === 'Franco' ? 'fr' : ''));
+  if (l === 'Casa') return 'ca';
+  if (l === 'Maleta') return 'ma';
+  if (l === 'Franco casa') return 'frc';
+  if (l === 'Franco maleta') return 'frm';
+  return '';
+}
+function nombreLugar(l) {
+  if (S.rol !== 'Franco') return l;
+  if (l === 'Franco casa') return 'Mi casa';
+  if (l === 'Franco maleta') return 'Mi maleta';
+  return l;
 }
 function aplicaLocal(mov) {
   if (!S.datos || !S.datos.catalogo) return;
@@ -86,9 +98,14 @@ function aplicaLocal(mov) {
   var de = lugarACampo(mov.de), ha = lugarACampo(mov.ha);
   S.datos.catalogo.forEach(function (r) {
     if (r.mo !== mov.mo || r.sa !== mov.sa) return;
-    if (mov.t === 'Ajuste') { if (ha) r[ha] = pz; return; }
-    if (de) r[de] = Math.max(0, r[de] - pz);
-    if (ha) r[ha] = r[ha] + pz;
+    if (mov.t === 'Ajuste') { if (ha) r[ha] = pz; }
+    else {
+      if (de) r[de] = Math.max(0, r[de] - pz);
+      if (ha) r[ha] = r[ha] + pz;
+    }
+    /* fr es la suma de los dos lugares de Franco; se recalcula para que
+       las pantallas que miran su total no se queden atrás. */
+    r.fr = (Number(r.frc) || 0) + (Number(r.frm) || 0);
   });
   set(LS.cat, JSON.stringify(S.datos.catalogo));
 }
@@ -378,22 +395,55 @@ function vInicio(p) {
       ren0.onclick = function () { S.tab = 'meta'; pinta(); };
       gtf.appendChild(ren0);
     } else if (ff.length) {
+      var totalFalta = ff.reduce(function (a, b) { return a + b.falta; }, 0);
+      var puedeSolo = ff.reduce(function (a, b) { return a + b.puedeSolo; }, 0);
+      var hayQuePedir = ff.reduce(function (a, b) { return a + b.tienePedir; }, 0);
+
       var ren1 = el('div', 'ren');
       var iz1 = el('div', 'col');
-      var t1 = el('div', 'alerta', 'Te faltan ' +
-        ff.reduce(function (a, b) { return a + b.falta; }, 0) + ' piezas');
-      iz1.appendChild(t1);
+      iz1.appendChild(el('div', 'alerta', 'A tu maleta le faltan ' + totalFalta + ' piezas'));
       iz1.appendChild(el('div', 'mini', ff.slice(0, 2).map(function (x) {
-        return x.mo.split(' ').slice(0, 2).join(' ') + ' ×' + x.falta;
-      }).join(' · ') + (ff.length > 2 ? ' y ' + (ff.length - 2) + ' más' : '')));
+        return x.sa + ' ×' + x.falta;
+      }).join(' · ') + (ff.length > 2 ? ' y ' + (ff.length - 2) + ' sabores más' : '')));
       ren1.appendChild(iz1);
-      ren1.appendChild(el('div', 'mini', '›'));
-      ren1.onclick = function () { S.tab = 'pedir'; pinta(); };
       gtf.appendChild(ren1);
+
+      if (puedeSolo) {
+        var ren1b = el('div', 'ren');
+        var iz1b = el('div', 'col');
+        iz1b.appendChild(el('div', null, 'Rellenar mi maleta'));
+        iz1b.appendChild(el('div', 'mini', 'tienes ' + puedeSolo +
+          (puedeSolo === 1 ? ' pieza' : ' piezas') + ' en tu casa para cubrirlo'));
+        ren1b.appendChild(iz1b);
+        ren1b.appendChild(el('div', 'mini', '›'));
+        ren1b.onclick = rellenarMiMaleta;
+        gtf.appendChild(ren1b);
+      }
+      if (hayQuePedir) {
+        var ren1c = el('div', 'ren');
+        var iz1c = el('div', 'col');
+        iz1c.appendChild(el('div', null, 'Pedirle a JP'));
+        iz1c.appendChild(el('div', 'mini', hayQuePedir +
+          (hayQuePedir === 1 ? ' pieza que' : ' piezas que') + ' no tienes en tu casa'));
+        ren1c.appendChild(iz1c);
+        ren1c.appendChild(el('div', 'mini', '›'));
+        ren1c.onclick = function () { S.tab = 'pedir'; pinta(); };
+        gtf.appendChild(ren1c);
+      }
     } else {
       var ren2 = el('div', 'ren');
       ren2.appendChild(el('div', 'mini', 'Tu maleta está completa según tu meta.'));
       gtf.appendChild(ren2);
+    }
+    if (scriptSabeMetas()) {
+      var renq = el('div', 'ren');
+      var izq = el('div', 'col');
+      izq.appendChild(el('div', 'mini', 'En tu maleta ' +
+        (S.datos.catalogo || []).reduce(function (a, r) { return a + (r.frm || 0); }, 0) +
+        ' · en tu casa ' +
+        (S.datos.catalogo || []).reduce(function (a, r) { return a + (r.frc || 0); }, 0)));
+      renq.appendChild(izq);
+      gtf.appendChild(renq);
     }
     if (pedidoAbierto) {
       var ren3 = el('div', 'ren');
@@ -632,21 +682,35 @@ function vInicio(p) {
    es JP y no debe pasar al lado de los precios ni de los PIN. */
 function metasHoy() { return (S.datos && S.datos.metas) || {}; }
 
-function stockFranco(modelo) {
+/* La meta va por sabor, no por modelo: Franco no trae 46 de cada sabor,
+   trae unas cuantas de cada uno. Una meta por modelo no le dice nada. */
+function metaDe(mo, sa) { return Number(metasHoy()[mo + '|' + sa]) || 0; }
+
+function stockFranco(modelo, campo) {
   return (S.datos.catalogo || []).reduce(function (a, r) {
-    return a + (r.mo === modelo ? (Number(r.fr) || 0) : 0);
+    return a + (r.mo === modelo ? (Number(r[campo || 'frm']) || 0) : 0);
   }, 0);
 }
 
+/* Lo que le falta a SU MALETA, sabor por sabor, y de eso cuánto puede
+   resolver solo con lo que tiene en su casa. Lo que su casa no alcanza a
+   cubrir es lo único por lo que tiene que molestar a JP. */
 function faltaFranco() {
-  var metas = metasHoy(), out = [];
-  Object.keys(metas).forEach(function (mo) {
-    var meta = Number(metas[mo]) || 0;
+  var out = [];
+  (S.datos.catalogo || []).forEach(function (r) {
+    var meta = metaDe(r.mo, r.sa);
     if (!meta) return;
-    var hay = stockFranco(mo);
-    if (hay < meta) out.push({ mo: mo, meta: meta, hay: hay, falta: meta - hay });
+    var hay = Number(r.frm) || 0;
+    if (hay >= meta) return;
+    var suCasa = Number(r.frc) || 0;
+    out.push({
+      mo: r.mo, sa: r.sa, meta: meta, hay: hay, falta: meta - hay,
+      suCasa: suCasa,
+      puedeSolo: Math.min(meta - hay, suCasa),
+      tienePedir: Math.max(0, (meta - hay) - suCasa),
+      casaJP: Number(r.ca) || 0
+    });
   });
-  out.sort(function (a, b) { return b.falta - a.falta; });
   return out;
 }
 
@@ -657,18 +721,19 @@ function hayMetaPuesta() {
 
 /* Mismo seguro que con deshacer: si el script publicado todavía no sabe
    de metas ni de pedidos, la app no los ofrece a medias. */
-function scriptSabeMetas() { return Number((S.datos || {}).v || 0) >= 3; }
+function scriptSabeMetas() { return Number((S.datos || {}).v || 0) >= 5; }
 
 /* La meta necesita señal: es un ajuste, no un movimiento, así que no pasa
    por la cola. Si no hay red se dice y no se finge que se guardó. */
-function guardaMeta(modelo, n, listo) {
+function guardaMeta(modelo, sabor, n, listo) {
   if (!navigator.onLine) { avisa('Sin señal: la meta se guarda con internet'); return; }
   fetch(get(LS.url) + '?action=meta&pin=' + encodeURIComponent(get(LS.pin)) +
-        '&mo=' + encodeURIComponent(modelo) + '&n=' + encodeURIComponent(n))
+        '&mo=' + encodeURIComponent(modelo) + '&sa=' + encodeURIComponent(sabor) +
+        '&n=' + encodeURIComponent(n))
     .then(function (r) { return r.json(); })
     .then(function (j) {
-      if (j && j.ok) { avisa('Meta guardada'); if (listo) listo(); }
-      else { avisa('No se pudo guardar la meta'); }
+      if (j && j.ok) { avisa('Meta guardada'); if (listo) listo(j); }
+      else { avisa((j && j.error) ? 'No se guardó: ' + j.error : 'No se pudo guardar la meta'); }
     })
     .catch(function () { avisa('No se pudo guardar la meta'); });
 }
@@ -680,60 +745,112 @@ function vMeta(p) {
   var w = el('div', 'col g12');
   w.style.marginTop = '14px';
   p.appendChild(w);
-  w.appendChild(el('div', 'sub', esFranco
-    ? 'Cuántas piezas de cada modelo quieres traer siempre en tu maleta. Con esto la app te avisa qué te falta.'
-    : 'La pone Franco desde su app. Tú también puedes cambiarla.'));
 
   if (!scriptSabeMetas()) {
     w.appendChild(el('div', 'card',
       'Falta publicar la versión nueva del script. Hasta entonces la meta no se puede guardar.'));
     return;
   }
-  var metas = metasHoy();
-  var modelos = Object.keys(metas);
-  if (!modelos.length) {
-    w.appendChild(el('div', 'card', 'Todavía no hay modelos en la pestaña Metas del Sheet.'));
-    return;
-  }
 
-  var g = el('div', 'group');
-  modelos.forEach(function (mo) {
-    var hay = stockFranco(mo);
-    var meta = Number(metas[mo]) || 0;
-    var ren = el('div', 'ren');
-    var iz = el('div', 'col');
-    iz.appendChild(el('div', null, mo.split(' ').slice(0, 2).join(' ')));
-    var sub = el('div', 'mini', 'traes ' + hay +
-      (meta ? (hay < meta ? ' · te faltan ' + (meta - hay) : ' · completo') : ' · sin meta'));
-    if (meta && hay < meta) sub.className = 'mini alerta';
-    iz.appendChild(sub);
-    ren.appendChild(iz);
+  w.appendChild(el('div', 'sub', esFranco
+    ? 'Cuántas piezas de cada sabor quieres traer siempre en tu maleta. Pon el modelo de un toque y después baja a 0 los sabores que no cargas.'
+    : 'La pone Franco desde su app. Tú también puedes cambiarla.'));
 
-    var f = el('div', 'fila');
-    f.style.gap = '8px';
-    var menos = el('button', 'b chico', '−'); menos.style.minWidth = '34px';
-    var num = el('div', 'tab-num', String(meta));
-    num.style.cssText = 'min-width:22px; text-align:center; font-weight:600';
-    var mas = el('button', 'b chico', '+'); mas.style.minWidth = '34px';
-    function pon(n) {
-      if (n < 0) return;
-      metas[mo] = n;
-      num.textContent = String(n);
-      guardaMeta(mo, n, function () { pinta(); });
-    }
-    menos.onclick = function () { pon(Math.max(0, (Number(metas[mo]) || 0) - 1)); };
-    mas.onclick = function () { pon((Number(metas[mo]) || 0) + 1); };
-    f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
-    ren.appendChild(f);
-    g.appendChild(ren);
+  var modelos = [];
+  (S.datos.catalogo || []).forEach(function (r) {
+    if (modelos.indexOf(r.mo) < 0) modelos.push(r.mo);
   });
-  w.appendChild(g);
+
+  modelos.forEach(function (mo) {
+    var sab = (S.datos.catalogo || []).filter(function (r) { return r.mo === mo; });
+    var conMeta = sab.filter(function (r) { return metaDe(r.mo, r.sa) > 0; }).length;
+    var sumaMeta = sab.reduce(function (a, r) { return a + metaDe(r.mo, r.sa); }, 0);
+    var enMaleta = sab.reduce(function (a, r) { return a + (Number(r.frm) || 0); }, 0);
+
+    var c = el('div', 'card');
+    var f = el('div', 'fila');
+    var t = el('div', null, mo);
+    t.style.cssText = 'font-size:15px; font-weight:600';
+    f.appendChild(t);
+    f.appendChild(el('div', 'sub', (sumaMeta ? 'meta ' + sumaMeta + ' · ' : 'sin meta · ') +
+      'traes ' + enMaleta + (vMeta.abierto === mo ? ' ⌄' : ' ›')));
+    f.onclick = function () {
+      vMeta.abierto = vMeta.abierto === mo ? '' : mo;
+      pinta();
+    };
+    c.appendChild(f);
+
+    if (vMeta.abierto === mo) {
+      /* El atajo: una meta pareja para todos los sabores del modelo.
+         Es lo que hace que poner la meta no sean 98 toques. */
+      var at = el('div', 'col g6');
+      at.style.cssText = 'border-top:.5px solid var(--sep); padding-top:10px';
+      at.appendChild(el('div', 'eti', 'De cada sabor de este modelo'));
+      var fa = el('div', 'fila');
+      fa.style.cssText = 'gap:7px; flex-wrap:wrap';
+      [0, 1, 2, 3, 4].forEach(function (n) {
+        var b = el('button', 'b chico', String(n));
+        b.style.minWidth = '42px';
+        b.onclick = function () {
+          guardaMeta(mo, '*', n, function () {
+            sab.forEach(function (r) { metasHoy()[r.mo + '|' + r.sa] = n; });
+            pinta();
+          });
+        };
+        fa.appendChild(b);
+      });
+      at.appendChild(fa);
+      at.appendChild(el('div', 'mini', conMeta + ' de ' + sab.length + ' sabores con meta'));
+      c.appendChild(at);
+
+      sab.forEach(function (r) {
+        var meta = metaDe(r.mo, r.sa);
+        var hay = Number(r.frm) || 0;
+        var ren = el('div', 'ren');
+        var iz = el('div', 'col');
+        iz.appendChild(el('div', null, r.sa));
+        var sub = el('div', 'mini', 'maleta ' + hay + ' · tu casa ' + (r.frc || 0) +
+          (meta ? (hay < meta ? ' · faltan ' + (meta - hay) : ' · completo') : ''));
+        if (meta && hay < meta) sub.className = 'mini alerta';
+        iz.appendChild(sub);
+        ren.appendChild(iz);
+        var fr = el('div', 'fila');
+        fr.style.gap = '8px';
+        var menos = el('button', 'b chico', '−'); menos.style.minWidth = '34px';
+        var num = el('div', 'tab-num', String(meta));
+        num.style.cssText = 'min-width:22px; text-align:center; font-weight:600';
+        var mas = el('button', 'b chico', '+'); mas.style.minWidth = '34px';
+        function pon(n) {
+          if (n < 0) return;
+          guardaMeta(r.mo, r.sa, n, function () {
+            metasHoy()[r.mo + '|' + r.sa] = n;
+            pinta();
+          });
+        }
+        menos.onclick = function () { pon(Math.max(0, meta - 1)); };
+        mas.onclick = function () { pon(meta + 1); };
+        fr.appendChild(menos); fr.appendChild(num); fr.appendChild(mas);
+        ren.appendChild(fr);
+        c.appendChild(ren);
+      });
+    }
+    w.appendChild(c);
+  });
 
   if (esFranco) {
-    var bp = el('button', 'b gde', 'Pedirle a JP lo que me falta');
-    bp.onclick = function () { S.tab = 'pedir'; pinta(); };
-    bp.disabled = !faltaFranco().length;
-    w.appendChild(bp);
+    var ffm = faltaFranco();
+    var puede = ffm.reduce(function (a, b) { return a + b.puedeSolo; }, 0);
+    var pedir = ffm.reduce(function (a, b) { return a + b.tienePedir; }, 0);
+    if (puede) {
+      var b1 = el('button', 'b gde', 'Rellenar mi maleta · ' + puede + ' piezas');
+      b1.onclick = rellenarMiMaleta;
+      w.appendChild(b1);
+    }
+    if (pedir) {
+      var b2 = el('button', puede ? 'b' : 'b gde', 'Pedirle a JP · ' + pedir + ' piezas');
+      b2.onclick = function () { S.tab = 'pedir'; pinta(); };
+      w.appendChild(b2);
+    }
   }
 }
 
@@ -741,7 +858,7 @@ function vMeta(p) {
    que puede escoger sabores concretos; lo que nunca ve son costos ni
    utilidades. El tope de cada sabor es lo que de verdad hay en casa. */
 function vPedir(p) {
-  if (!S.pedido) S.pedido = { sel: {}, filtro: 'falta' };
+  if (!S.pedido) S.pedido = { sel: null };
   var P = S.pedido;
   p.appendChild(el('h1', null, 'Pedirle a JP'));
   barraCola(p);
@@ -749,53 +866,44 @@ function vPedir(p) {
   w.style.marginTop = '14px';
   p.appendChild(w);
 
-  var falta = faltaFranco();
-  var faltantes = {};
-  falta.forEach(function (x) { faltantes[x.mo] = x.falta; });
+  /* Solo lo que su propia casa no alcanza a cubrir: si puede resolverlo
+     solo, no tiene por qué molestar a JP. Y el tope es lo que JP tiene
+     de verdad en su casa. */
+  var falta = faltaFranco().filter(function (x) { return x.tienePedir > 0; });
+  var pedibles = falta.filter(function (x) { return x.casaJP > 0; });
+  var sinExistencia = falta.filter(function (x) { return x.casaJP <= 0; });
 
-  if (falta.length) {
-    w.appendChild(el('div', 'sub', 'Según tu meta te faltan ' +
-      falta.reduce(function (a, b) { return a + b.falta; }, 0) + ' piezas: ' +
-      falta.map(function (x) {
-        return x.mo.split(' ').slice(0, 2).join(' ') + ' ×' + x.falta;
-      }).join(' · ')));
+  if (P.sel === null) {
+    P.sel = {};
+    pedibles.forEach(function (x) {
+      P.sel[x.mo + '|' + x.sa] = Math.min(x.tienePedir, x.casaJP);
+    });
   }
 
-  var seg = el('div', 'seg');
-  [['falta', 'Lo que me falta'], ['todo', 'Todos los modelos']].forEach(function (o) {
-    var b = el('button', P.filtro === o[0] ? 'on' : '', o[1]);
-    b.onclick = function () { P.filtro = o[0]; pinta(); };
-    seg.appendChild(b);
-  });
-  w.appendChild(seg);
-
-  var lista = (S.datos.catalogo || []).filter(function (r) {
-    if (r.ca <= 0) return false;
-    if (P.filtro === 'falta') return !!faltantes[r.mo];
-    return true;
-  });
-
-  if (!lista.length) {
-    w.appendChild(el('div', 'card', P.filtro === 'falta'
-      ? 'No te falta nada según tu meta, o JP no tiene en casa lo que te falta.'
-      : 'JP no tiene nada en casa ahora mismo.'));
+  if (!falta.length) {
+    w.appendChild(el('div', 'card',
+      'No necesitas pedirle nada: lo que te falta lo tienes en tu casa, o ya estás completo.'));
+    return;
   }
+
+  w.appendChild(el('div', 'sub', 'Ya viene con lo que te falta y no tienes en tu casa. ' +
+    'Cambia lo que quieras antes de mandarlo.'));
 
   var g = el('div', 'group');
-  var modeloActual = '';
-  lista.forEach(function (r) {
-    if (r.mo !== modeloActual) {
-      modeloActual = r.mo;
+  var moActual = '';
+  pedibles.forEach(function (x) {
+    if (x.mo !== moActual) {
+      moActual = x.mo;
       var cab = el('div', 'ren');
-      var tt = el('div', 'eti', r.mo + (faltantes[r.mo] ? ' · te faltan ' + faltantes[r.mo] : ''));
-      cab.appendChild(tt);
+      cab.appendChild(el('div', 'eti', x.mo));
       g.appendChild(cab);
     }
-    var k = r.mo + '|' + r.sa;
+    var k = x.mo + '|' + x.sa;
     var ren = el('div', 'ren');
     var iz = el('div', 'col');
-    iz.appendChild(el('div', null, r.sa));
-    iz.appendChild(el('div', 'mini', r.ca + ' en casa de JP'));
+    iz.appendChild(el('div', null, x.sa));
+    iz.appendChild(el('div', 'mini', 'meta ' + x.meta + ' · traes ' + x.hay +
+      ' · JP tiene ' + x.casaJP));
     ren.appendChild(iz);
     var f = el('div', 'fila');
     f.style.gap = '8px';
@@ -804,12 +912,19 @@ function vPedir(p) {
     num.style.cssText = 'min-width:20px; text-align:center';
     var mas = el('button', 'b chico', '+'); mas.style.minWidth = '34px';
     menos.onclick = function () { P.sel[k] = Math.max(0, (P.sel[k] || 0) - 1); pinta(); };
-    mas.onclick = function () { P.sel[k] = Math.min(r.ca, (P.sel[k] || 0) + 1); pinta(); };
+    mas.onclick = function () { P.sel[k] = Math.min(x.casaJP, (P.sel[k] || 0) + 1); pinta(); };
     f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
     ren.appendChild(f);
     g.appendChild(ren);
   });
-  w.appendChild(g);
+  if (pedibles.length) w.appendChild(g);
+
+  if (sinExistencia.length) {
+    var c2 = el('div', 'card');
+    c2.appendChild(el('div', 'mini', 'Esto te falta pero JP tampoco lo tiene en casa: ' +
+      sinExistencia.map(function (x) { return x.sa + ' ×' + x.tienePedir; }).join(' · ')));
+    w.appendChild(c2);
+  }
 
   var total = Object.keys(P.sel).reduce(function (a, k) { return a + P.sel[k]; }, 0);
   var b = el('button', 'b gde', total ? 'Mandar el pedido · ' + total + ' piezas' : 'Mandar el pedido');
@@ -913,7 +1028,15 @@ function vVenta(p) {
     w.appendChild(grupo('Desde', ['Maleta', 'Casa', 'Uber'], v.de, function (x) {
       v.de = x; pinta();
     }));
-  } else { v.de = 'Franco'; }
+  } else {
+    /* Franco también elige de dónde sale la pieza: trae maleta y casa,
+       igual que JP. Antes salía siempre del mismo montón y por eso su
+       maleta nunca se veía vacía. */
+    if (['Franco maleta', 'Franco casa'].indexOf(v.de) < 0) v.de = 'Franco maleta';
+    w.appendChild(grupo('Desde', ['Franco maleta', 'Franco casa'], v.de, function (x) {
+      v.de = x; pinta();
+    }, { 'Franco maleta': 'Mi maleta', 'Franco casa': 'Mi casa' }));
+  }
 
   var salidaReal = v.de === 'Uber' ? 'Maleta' : v.de;
 
@@ -1567,22 +1690,47 @@ function cobro(x) {
 /* ------------------------------------------------------------------ inventario */
 
 function vInventario(p) {
-  if (S.rol === 'Franco') vInventario.lugar = 'fr';
-  else if (!vInventario.lugar || vInventario.lugar === 'fr') vInventario.lugar = 'ca';
+  var esFr = S.rol === 'Franco';
+  var permitidos = esFr ? ['frm', 'frc'] : ['ca', 'ma', 'frc', 'frm'];
+  if (permitidos.indexOf(vInventario.lugar) < 0) vInventario.lugar = permitidos[0];
   var lugar = vInventario.lugar;
-  p.appendChild(el('h1', null, S.rol === 'Franco' ? 'Mi stock' : 'Inventario'));
+  p.appendChild(el('h1', null, esFr ? 'Mi stock' : 'Inventario'));
   barraCola(p);
 
-  if (S.rol === 'JP') {
-    var seg = el('div', 'seg');
-    seg.style.margin = '12px 0';
-    [['ca', 'Casa'], ['ma', 'Maleta'], ['fr', 'Franco']].forEach(function (o) {
+  var seg = el('div', 'seg');
+  seg.style.margin = '12px 0';
+  (esFr ? [['frm', 'Mi maleta'], ['frc', 'Mi casa']]
+        : [['ca', 'Casa'], ['ma', 'Maleta'], ['frc', 'Franco casa'], ['frm', 'Franco maleta']])
+    .forEach(function (o) {
       var b = el('button', lugar === o[0] ? 'on' : '', o[1]);
       b.onclick = function () { vInventario.lugar = o[0]; pinta(); };
       seg.appendChild(b);
     });
-    p.appendChild(seg);
+  p.appendChild(seg);
 
+  /* Franco rellena su maleta desde su casa, igual que JP la suya. */
+  if (esFr && lugar === 'frm') {
+    var ffi = faltaFranco();
+    var puede = ffi.reduce(function (a, b) { return a + b.puedeSolo; }, 0);
+    if (ffi.length) {
+      var cmf = el('div', 'card ac');
+      cmf.style.marginBottom = '12px';
+      var tf = el('div', null, 'Te faltan ' +
+        ffi.reduce(function (a, b) { return a + b.falta; }, 0) + ' piezas');
+      tf.style.cssText = 'font-size:15px; font-weight:600; color:var(--warn)';
+      cmf.appendChild(tf);
+      cmf.appendChild(el('div', 'mini', ffi.slice(0, 8).map(function (x) {
+        return x.sa + ' ×' + x.falta;
+      }).join(' · ') + (ffi.length > 8 ? ' y ' + (ffi.length - 8) + ' más' : '')));
+      var bf = el('button', 'b gde', puede ? 'Rellenar mi maleta' : 'Pedirle a JP');
+      bf.style.cssText = 'width:100%; margin-top:10px; min-height:44px; font-size:14px';
+      bf.onclick = puede ? rellenarMiMaleta : function () { S.tab = 'pedir'; pinta(); };
+      cmf.appendChild(bf);
+      p.appendChild(cmf);
+    }
+  }
+
+  if (S.rol === 'JP') {
     if (lugar === 'ma') {
       var falta = faltaMaleta();
       if (falta.length) {
@@ -1687,7 +1835,8 @@ function vMovimiento(tipo) {
     }
 
     if (tipo === 'Ajuste') {
-      c.appendChild(grupo('En qué lugar contaste', ['Casa', 'Maleta', 'Franco'], d.ha,
+      c.appendChild(grupo('En qué lugar contaste',
+        ['Casa', 'Maleta', 'Franco casa', 'Franco maleta'], d.ha,
         function (x) { d.ha = x; hoja(null); dibuja(); }));
     }
 
@@ -1727,6 +1876,69 @@ function vMovimiento(tipo) {
 
 /* La app propone, JP confirma pieza por pieza: nada se mueve sin que él
    diga qué sí metió a la maleta y qué no. */
+/* Lo mismo que rellenarMaleta, pero de la casa de Franco a su maleta.
+   Su meta es por modelo, así que los sabores los escoge él: se le
+   muestran los del modelo que trae corto, con tope lo que tiene en casa. */
+function rellenarMiMaleta() {
+  var falta = faltaFranco().filter(function (x) { return x.puedeSolo > 0; });
+  if (!falta.length) { avisa('No tienes en tu casa lo que te falta'); return; }
+  var sel = {};
+  falta.forEach(function (x) { sel[x.mo + '|' + x.sa] = x.puedeSolo; });
+
+  function dibuja() {
+    var c = el('div', 'col g12');
+    c.appendChild(el('h1', null, 'Rellenar mi maleta'));
+    c.appendChild(el('div', 'mini',
+      'De tu casa a tu maleta. Ya traen lo que te falta: bájale o súbele a lo que de verdad metiste.'));
+    var cuerpo = el('div', 'col g6');
+    cuerpo.style.cssText = 'max-height:48vh; overflow-y:auto';
+    var moActual = '';
+    falta.forEach(function (x) {
+      if (x.mo !== moActual) {
+        moActual = x.mo;
+        var cab = el('div', 'ren');
+        cab.appendChild(el('div', 'eti', x.mo));
+        cuerpo.appendChild(cab);
+      }
+      var k = x.mo + '|' + x.sa;
+      var ren = el('div', 'ren');
+      var izq = el('div', 'col');
+      izq.appendChild(el('div', null, x.sa));
+      izq.appendChild(el('div', 'mini', 'meta ' + x.meta + ' · traes ' + x.hay +
+        ' · en tu casa ' + x.suCasa));
+      ren.appendChild(izq);
+      var f = el('div', 'fila');
+      f.style.gap = '8px';
+      var menos = el('button', 'b chico', '−'); menos.style.minWidth = '38px';
+      var num = el('div', null, String(sel[k]));
+      num.style.cssText = 'min-width:22px; text-align:center; font-weight:600';
+      var mas = el('button', 'b chico', '+'); mas.style.minWidth = '38px';
+      menos.onclick = function () { sel[k] = Math.max(0, sel[k] - 1); hoja(null); dibuja(); };
+      mas.onclick = function () { sel[k] = Math.min(x.suCasa, sel[k] + 1); hoja(null); dibuja(); };
+      f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
+      ren.appendChild(f);
+      cuerpo.appendChild(ren);
+    });
+    c.appendChild(cuerpo);
+
+    var n = Object.keys(sel).reduce(function (a, k) { return a + sel[k]; }, 0);
+    var b = el('button', 'b gde', n ? 'Pasé ' + n + ' piezas a mi maleta' : 'No metí nada');
+    b.disabled = !n;
+    b.onclick = function () {
+      Object.keys(sel).forEach(function (k) {
+        if (!sel[k]) return;
+        var pz = k.split('|');
+        encola({ t: 'Surtido', q: 'Franco', mo: pz[0], sa: pz[1], pz: sel[k],
+                 de: 'Franco casa', ha: 'Franco maleta' });
+      });
+      hoja(null); avisa('Maleta actualizada'); pinta();
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
+}
+
 function rellenarMaleta() {
   var falta = faltaMaleta();
   var sel = {};
@@ -1817,10 +2029,14 @@ function vFranco(p) {
   fs.appendChild(t);
   fs.appendChild(el('div', 'sub', stock.reduce(function (a, r) { return a + r.fr; }, 0) + ' piezas'));
   cs.appendChild(fs);
+  cs.appendChild(el('div', 'mini', 'En su casa ' +
+    (S.datos.catalogo || []).reduce(function (a, r) { return a + (r.frc || 0); }, 0) +
+    ' · en su maleta ' +
+    (S.datos.catalogo || []).reduce(function (a, r) { return a + (r.frm || 0); }, 0)));
   stock.slice(0, 8).forEach(function (r) {
     var ren = el('div', 'ren');
     ren.appendChild(el('div', null, r.mo.split(' ').slice(0, 2).join(' ') + ' · ' + r.sa));
-    ren.appendChild(el('div', null, String(r.fr)));
+    ren.appendChild(el('div', 'mini', (r.frc || 0) + ' casa · ' + (r.frm || 0) + ' maleta'));
     cs.appendChild(ren);
   });
   if (stock.length > 8) cs.appendChild(el('div', 'mini', 'y ' + (stock.length - 8) + ' sabores más'));
@@ -1835,8 +2051,9 @@ function vFranco(p) {
   var ff2 = faltaFranco();
   izm.appendChild(el('div', 'mini', !hayMetaPuesta()
     ? 'Todavía no la pone'
-    : (ff2.length ? 'Le faltan ' + ff2.reduce(function (a, b) { return a + b.falta; }, 0) + ' piezas'
-                  : 'Completa')));
+    : (ff2.length ? 'A su maleta le faltan ' +
+        ff2.reduce(function (a, b) { return a + b.falta; }, 0) + ' piezas'
+                  : 'Su maleta está completa')));
   renm.appendChild(izm);
   renm.appendChild(el('div', 'mini', '›'));
   renm.onclick = function () { S.tab = 'meta'; pinta(); };
@@ -1914,7 +2131,7 @@ function surtido(pedido) {
         if (!sel[k]) return;
         var pz = k.split('|');
         encola({ t: 'Surtido', q: 'JP', mo: pz[0], sa: pz[1], pz: sel[k],
-                 de: 'Casa', ha: 'Franco',
+                 de: 'Casa', ha: 'Franco casa',
                  rf: pedido ? pedido.ancla : '',
                  no: pedido ? 'Surte el pedido de las ' + pedido.hora : '' });
       });
