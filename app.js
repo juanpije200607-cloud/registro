@@ -265,7 +265,8 @@ function pinta() {
   if (pinta.ultima !== S.tab) { $('#pantalla').scrollTop = 0; pinta.ultima = S.tab; }
   ({
     inicio: vInicio, venta: vVenta, pend: vPendientes,
-    inv: vInventario, franco: vFranco, res: vResultados
+    inv: vInventario, franco: vFranco, res: vResultados,
+    meta: vMeta, pedir: vPedir
   }[S.tab] || vInicio)(p);
   pintaNav();
 }
@@ -274,7 +275,8 @@ function pintaNav() {
   var n = $('#nav');
   n.innerHTML = '';
   var tabs = (S.rol === 'Franco')
-    ? [['inicio', '◎', 'Inicio'], ['venta', '＋', 'Venta'], ['inv', '▦', 'Mi stock']]
+    ? [['inicio', '◎', 'Inicio'], ['venta', '＋', 'Venta'], ['inv', '▦', 'Mi stock'],
+       ['meta', '◉', 'Mi meta']]
     : [['inicio', '◎', 'Inicio'], ['venta', '＋', 'Venta'], ['inv', '▦', 'Inventario'],
        ['franco', '◍', 'Franco'], ['res', '◴', 'Resultados']];
   tabs.forEach(function (t) {
@@ -352,6 +354,57 @@ function vInicio(p) {
         cd.appendChild(ren);
       });
     p.appendChild(cd);
+
+    /* Te falta: el centro de su app. Sin esto solo puede ver y registrar,
+       no manejar su maleta. */
+    var ff = faltaFranco();
+    var pedidoAbierto = (S.datos.pedidos || []).filter(function (x) {
+      return x.quien === 'Franco';
+    })[0];
+    var gtf = el('div', 'group');
+    if (!scriptSabeMetas()) {
+      var renv = el('div', 'ren');
+      renv.appendChild(el('div', 'mini',
+        'Falta publicar la versión nueva del script para poner tu meta y pedir.'));
+      gtf.appendChild(renv);
+    } else if (!hayMetaPuesta()) {
+      var ren0 = el('div', 'ren');
+      var iz0 = el('div', 'col');
+      iz0.appendChild(el('div', null, 'Pon tu meta'));
+      iz0.appendChild(el('div', 'mini',
+        'Dinos cuántas piezas de cada modelo quieres traer y te avisamos qué te falta.'));
+      ren0.appendChild(iz0);
+      ren0.appendChild(el('div', 'mini', '›'));
+      ren0.onclick = function () { S.tab = 'meta'; pinta(); };
+      gtf.appendChild(ren0);
+    } else if (ff.length) {
+      var ren1 = el('div', 'ren');
+      var iz1 = el('div', 'col');
+      var t1 = el('div', 'alerta', 'Te faltan ' +
+        ff.reduce(function (a, b) { return a + b.falta; }, 0) + ' piezas');
+      iz1.appendChild(t1);
+      iz1.appendChild(el('div', 'mini', ff.slice(0, 2).map(function (x) {
+        return x.mo.split(' ').slice(0, 2).join(' ') + ' ×' + x.falta;
+      }).join(' · ') + (ff.length > 2 ? ' y ' + (ff.length - 2) + ' más' : '')));
+      ren1.appendChild(iz1);
+      ren1.appendChild(el('div', 'mini', '›'));
+      ren1.onclick = function () { S.tab = 'pedir'; pinta(); };
+      gtf.appendChild(ren1);
+    } else {
+      var ren2 = el('div', 'ren');
+      ren2.appendChild(el('div', 'mini', 'Tu maleta está completa según tu meta.'));
+      gtf.appendChild(ren2);
+    }
+    if (pedidoAbierto) {
+      var ren3 = el('div', 'ren');
+      var iz3 = el('div', 'col');
+      iz3.appendChild(el('div', null, 'Ya pediste ' + pedidoAbierto.piezas + ' piezas'));
+      iz3.appendChild(el('div', 'mini', 'JP todavía no te las surte'));
+      ren3.appendChild(iz3);
+      gtf.appendChild(ren3);
+    }
+    p.appendChild(el('div', 'cap', 'Tu maleta'));
+    p.appendChild(gtf);
 
     var pc = S.datos.porConfirmar || [];
     if (pc.length) {
@@ -520,6 +573,33 @@ function vInicio(p) {
       ren1.onclick = rellenarMaleta;
       gj.appendChild(ren1);
     }
+    /* Lo que Franco pidió y lo que reportó. Antes esto solo se veía
+       abriendo el Sheet, así que en la práctica no se veía. */
+    (S.datos.pedidos || []).forEach(function (pe) {
+      var renp = el('div', 'ren');
+      var izp = el('div', 'col');
+      var tp = el('div', 'alerta', pe.quien + ' te pidió ' + pe.piezas + ' piezas');
+      izp.appendChild(tp);
+      izp.appendChild(el('div', 'mini', pe.lineas.slice(0, 2).map(function (l) {
+        return l.sabor + ' ×' + l.piezas;
+      }).join(' · ') + (pe.lineas.length > 2 ? ' y ' + (pe.lineas.length - 2) + ' más' : '') +
+        ' · ' + pe.hora));
+      renp.appendChild(izp);
+      renp.appendChild(el('div', 'mini', '›'));
+      renp.onclick = function () { surtido(pe); };
+      gj.appendChild(renp);
+    });
+
+    (S.datos.reportes || []).slice(0, 3).forEach(function (re) {
+      var renr = el('div', 'ren');
+      var izr = el('div', 'col');
+      izr.appendChild(el('div', null, re.quien + ' reportó algo'));
+      izr.appendChild(el('div', 'mini', (re.sabor ? re.sabor + ': ' : '') + re.nota));
+      renr.appendChild(izr);
+      renr.appendChild(el('div', 'mini', re.fecha.slice(5)));
+      gj.appendChild(renr);
+    });
+
     var sf = S.datos.saldoFranco;
     if (sf) {
       var ren2 = el('div', 'ren');
@@ -543,6 +623,215 @@ function vInicio(p) {
   var nv = el('button', 'b gde', 'Nueva venta');
   nv.onclick = function () { S.tab = 'venta'; pinta(); };
   p.appendChild(nv);
+}
+
+/* --------------------------------------------- la maleta de Franco */
+
+/* La meta de Franco es por modelo y la pone él. Vive en la pestaña Metas
+   del Sheet, no en Ajustes: es el primer dato que escribe alguien que no
+   es JP y no debe pasar al lado de los precios ni de los PIN. */
+function metasHoy() { return (S.datos && S.datos.metas) || {}; }
+
+function stockFranco(modelo) {
+  return (S.datos.catalogo || []).reduce(function (a, r) {
+    return a + (r.mo === modelo ? (Number(r.fr) || 0) : 0);
+  }, 0);
+}
+
+function faltaFranco() {
+  var metas = metasHoy(), out = [];
+  Object.keys(metas).forEach(function (mo) {
+    var meta = Number(metas[mo]) || 0;
+    if (!meta) return;
+    var hay = stockFranco(mo);
+    if (hay < meta) out.push({ mo: mo, meta: meta, hay: hay, falta: meta - hay });
+  });
+  out.sort(function (a, b) { return b.falta - a.falta; });
+  return out;
+}
+
+function hayMetaPuesta() {
+  var m = metasHoy();
+  return Object.keys(m).some(function (k) { return Number(m[k]) > 0; });
+}
+
+/* Mismo seguro que con deshacer: si el script publicado todavía no sabe
+   de metas ni de pedidos, la app no los ofrece a medias. */
+function scriptSabeMetas() { return Number((S.datos || {}).v || 0) >= 3; }
+
+/* La meta necesita señal: es un ajuste, no un movimiento, así que no pasa
+   por la cola. Si no hay red se dice y no se finge que se guardó. */
+function guardaMeta(modelo, n, listo) {
+  if (!navigator.onLine) { avisa('Sin señal: la meta se guarda con internet'); return; }
+  fetch(get(LS.url) + '?action=meta&pin=' + encodeURIComponent(get(LS.pin)) +
+        '&mo=' + encodeURIComponent(modelo) + '&n=' + encodeURIComponent(n))
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (j && j.ok) { avisa('Meta guardada'); if (listo) listo(); }
+      else { avisa('No se pudo guardar la meta'); }
+    })
+    .catch(function () { avisa('No se pudo guardar la meta'); });
+}
+
+function vMeta(p) {
+  var esFranco = S.rol === 'Franco';
+  p.appendChild(el('h1', null, esFranco ? 'Mi meta' : 'La meta de Franco'));
+  barraCola(p);
+  var w = el('div', 'col g12');
+  w.style.marginTop = '14px';
+  p.appendChild(w);
+  w.appendChild(el('div', 'sub', esFranco
+    ? 'Cuántas piezas de cada modelo quieres traer siempre en tu maleta. Con esto la app te avisa qué te falta.'
+    : 'La pone Franco desde su app. Tú también puedes cambiarla.'));
+
+  if (!scriptSabeMetas()) {
+    w.appendChild(el('div', 'card',
+      'Falta publicar la versión nueva del script. Hasta entonces la meta no se puede guardar.'));
+    return;
+  }
+  var metas = metasHoy();
+  var modelos = Object.keys(metas);
+  if (!modelos.length) {
+    w.appendChild(el('div', 'card', 'Todavía no hay modelos en la pestaña Metas del Sheet.'));
+    return;
+  }
+
+  var g = el('div', 'group');
+  modelos.forEach(function (mo) {
+    var hay = stockFranco(mo);
+    var meta = Number(metas[mo]) || 0;
+    var ren = el('div', 'ren');
+    var iz = el('div', 'col');
+    iz.appendChild(el('div', null, mo.split(' ').slice(0, 2).join(' ')));
+    var sub = el('div', 'mini', 'traes ' + hay +
+      (meta ? (hay < meta ? ' · te faltan ' + (meta - hay) : ' · completo') : ' · sin meta'));
+    if (meta && hay < meta) sub.className = 'mini alerta';
+    iz.appendChild(sub);
+    ren.appendChild(iz);
+
+    var f = el('div', 'fila');
+    f.style.gap = '8px';
+    var menos = el('button', 'b chico', '−'); menos.style.minWidth = '34px';
+    var num = el('div', 'tab-num', String(meta));
+    num.style.cssText = 'min-width:22px; text-align:center; font-weight:600';
+    var mas = el('button', 'b chico', '+'); mas.style.minWidth = '34px';
+    function pon(n) {
+      if (n < 0) return;
+      metas[mo] = n;
+      num.textContent = String(n);
+      guardaMeta(mo, n, function () { pinta(); });
+    }
+    menos.onclick = function () { pon(Math.max(0, (Number(metas[mo]) || 0) - 1)); };
+    mas.onclick = function () { pon((Number(metas[mo]) || 0) + 1); };
+    f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
+    ren.appendChild(f);
+    g.appendChild(ren);
+  });
+  w.appendChild(g);
+
+  if (esFranco) {
+    var bp = el('button', 'b gde', 'Pedirle a JP lo que me falta');
+    bp.onclick = function () { S.tab = 'pedir'; pinta(); };
+    bp.disabled = !faltaFranco().length;
+    w.appendChild(bp);
+  }
+}
+
+/* Franco pide. JP decidió el 17 nov que sí vea el inventario de casa, así
+   que puede escoger sabores concretos; lo que nunca ve son costos ni
+   utilidades. El tope de cada sabor es lo que de verdad hay en casa. */
+function vPedir(p) {
+  if (!S.pedido) S.pedido = { sel: {}, filtro: 'falta' };
+  var P = S.pedido;
+  p.appendChild(el('h1', null, 'Pedirle a JP'));
+  barraCola(p);
+  var w = el('div', 'col g12');
+  w.style.marginTop = '14px';
+  p.appendChild(w);
+
+  var falta = faltaFranco();
+  var faltantes = {};
+  falta.forEach(function (x) { faltantes[x.mo] = x.falta; });
+
+  if (falta.length) {
+    w.appendChild(el('div', 'sub', 'Según tu meta te faltan ' +
+      falta.reduce(function (a, b) { return a + b.falta; }, 0) + ' piezas: ' +
+      falta.map(function (x) {
+        return x.mo.split(' ').slice(0, 2).join(' ') + ' ×' + x.falta;
+      }).join(' · ')));
+  }
+
+  var seg = el('div', 'seg');
+  [['falta', 'Lo que me falta'], ['todo', 'Todos los modelos']].forEach(function (o) {
+    var b = el('button', P.filtro === o[0] ? 'on' : '', o[1]);
+    b.onclick = function () { P.filtro = o[0]; pinta(); };
+    seg.appendChild(b);
+  });
+  w.appendChild(seg);
+
+  var lista = (S.datos.catalogo || []).filter(function (r) {
+    if (r.ca <= 0) return false;
+    if (P.filtro === 'falta') return !!faltantes[r.mo];
+    return true;
+  });
+
+  if (!lista.length) {
+    w.appendChild(el('div', 'card', P.filtro === 'falta'
+      ? 'No te falta nada según tu meta, o JP no tiene en casa lo que te falta.'
+      : 'JP no tiene nada en casa ahora mismo.'));
+  }
+
+  var g = el('div', 'group');
+  var modeloActual = '';
+  lista.forEach(function (r) {
+    if (r.mo !== modeloActual) {
+      modeloActual = r.mo;
+      var cab = el('div', 'ren');
+      var tt = el('div', 'eti', r.mo + (faltantes[r.mo] ? ' · te faltan ' + faltantes[r.mo] : ''));
+      cab.appendChild(tt);
+      g.appendChild(cab);
+    }
+    var k = r.mo + '|' + r.sa;
+    var ren = el('div', 'ren');
+    var iz = el('div', 'col');
+    iz.appendChild(el('div', null, r.sa));
+    iz.appendChild(el('div', 'mini', r.ca + ' en casa de JP'));
+    ren.appendChild(iz);
+    var f = el('div', 'fila');
+    f.style.gap = '8px';
+    var menos = el('button', 'b chico', '−'); menos.style.minWidth = '34px';
+    var num = el('div', 'tab-num', String(P.sel[k] || 0));
+    num.style.cssText = 'min-width:20px; text-align:center';
+    var mas = el('button', 'b chico', '+'); mas.style.minWidth = '34px';
+    menos.onclick = function () { P.sel[k] = Math.max(0, (P.sel[k] || 0) - 1); pinta(); };
+    mas.onclick = function () { P.sel[k] = Math.min(r.ca, (P.sel[k] || 0) + 1); pinta(); };
+    f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
+    ren.appendChild(f);
+    g.appendChild(ren);
+  });
+  w.appendChild(g);
+
+  var total = Object.keys(P.sel).reduce(function (a, k) { return a + P.sel[k]; }, 0);
+  var b = el('button', 'b gde', total ? 'Mandar el pedido · ' + total + ' piezas' : 'Mandar el pedido');
+  b.disabled = !total;
+  b.onclick = function () {
+    var ancla = folio(), primero = true;
+    Object.keys(P.sel).forEach(function (k) {
+      if (!P.sel[k]) return;
+      var par = k.split('|');
+      encola({
+        f: primero ? ancla : undefined, rf: ancla,
+        t: 'Pedido', q: S.rol, mo: par[0], sa: par[1], pz: P.sel[k],
+        no: 'Pedido de ' + S.rol
+      });
+      primero = false;
+    });
+    S.pedido = null;
+    avisa('Pedido mandado a JP');
+    S.tab = 'inicio';
+    pinta();
+  };
+  w.appendChild(b);
 }
 
 /* Meta de la maleta: 2 por sabor en Waka 33k/36k/15k/100k y Lana; 1 en Fasta y Elfbar */
@@ -1537,6 +1826,23 @@ function vFranco(p) {
   if (stock.length > 8) cs.appendChild(el('div', 'mini', 'y ' + (stock.length - 8) + ' sabores más'));
   p.appendChild(cs);
 
+  /* Su meta: la pone él, pero JP la ve y la puede cambiar. */
+  var gm = el('div', 'group');
+  gm.style.marginTop = '12px';
+  var renm = el('div', 'ren');
+  var izm = el('div', 'col');
+  izm.appendChild(el('div', null, 'Su meta de maleta'));
+  var ff2 = faltaFranco();
+  izm.appendChild(el('div', 'mini', !hayMetaPuesta()
+    ? 'Todavía no la pone'
+    : (ff2.length ? 'Le faltan ' + ff2.reduce(function (a, b) { return a + b.falta; }, 0) + ' piezas'
+                  : 'Completa')));
+  renm.appendChild(izm);
+  renm.appendChild(el('div', 'mini', '›'));
+  renm.onclick = function () { S.tab = 'meta'; pinta(); };
+  gm.appendChild(renm);
+  p.appendChild(gm);
+
   var bs = el('button', 'b', 'Surtirle de casa');
   bs.style.cssText = 'width:100%; margin-top:12px';
   bs.onclick = surtido;
@@ -1564,12 +1870,21 @@ function pagoFranco() {
   hoja(c);
 }
 
-function surtido() {
+function surtido(pedido) {
   var sel = {};
+  /* Si viene de un pedido, llega lleno con lo que pidió: JP solo confirma
+     o ajusta. El Surtido lleva el ancla del pedido para que quede atendido. */
+  if (pedido) {
+    pedido.lineas.forEach(function (l) {
+      sel[l.modelo + '|' + l.sabor] = l.piezas;
+    });
+  }
   function dibuja() {
     var c = el('div', 'col g12');
-    c.appendChild(el('h1', null, 'Surtirle de casa'));
-    c.appendChild(el('div', 'mini', 'Elige cuántas piezas de cada sabor le entregas.'));
+    c.appendChild(el('h1', null, pedido ? 'Surtir el pedido' : 'Surtirle de casa'));
+    c.appendChild(el('div', 'mini', pedido
+      ? 'Ya viene con lo que te pidió. Cambia lo que quieras antes de entregar.'
+      : 'Elige cuántas piezas de cada sabor le entregas.'));
     var cuerpo = el('div', 'col g6');
     cuerpo.style.cssText = 'max-height:46vh; overflow-y:auto';
     (S.datos.catalogo || []).filter(function (r) { return r.ca > 0; })
@@ -1598,9 +1913,15 @@ function surtido() {
       Object.keys(sel).forEach(function (k) {
         if (!sel[k]) return;
         var pz = k.split('|');
-        encola({ t: 'Surtido', q: 'JP', mo: pz[0], sa: pz[1], pz: sel[k], de: 'Casa', ha: 'Franco' });
+        encola({ t: 'Surtido', q: 'JP', mo: pz[0], sa: pz[1], pz: sel[k],
+                 de: 'Casa', ha: 'Franco',
+                 rf: pedido ? pedido.ancla : '',
+                 no: pedido ? 'Surte el pedido de las ' + pedido.hora : '' });
       });
-      hoja(null); avisa('Surtido registrado'); baja(true);
+      if (pedido) S.datos.pedidos = (S.datos.pedidos || []).filter(function (x) {
+        return x.ancla !== pedido.ancla;
+      });
+      hoja(null); avisa('Surtido registrado'); pinta(); baja(true);
     };
     c.appendChild(b);
     hoja(c);
