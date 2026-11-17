@@ -198,6 +198,11 @@ function pidePin(msg) {
     if (dir.indexOf('/exec') < 0) { avisa('La dirección debe terminar en /exec'); return; }
     set(LS.url, dir);
     if (!p.value.trim()) { avisa('Falta el PIN'); return; }
+    /* Entrar con un PIN borra lo que quedo del anterior: nadie debe ver,
+       ni un instante, datos de la sesion de otro en el mismo telefono. */
+    set(LS.cat, ''); set(LS.quien, '');
+    S.datos = null; S.rol = ''; S.tab = 'inicio';
+    vInventario.lugar = '';
     set(LS.pin, p.value.trim());
     $('#pantalla .wrap').innerHTML = '';
     $('#pantalla .wrap').appendChild(el('div', 'sub', 'Entrando…'));
@@ -226,7 +231,7 @@ function tomaDelLink() {
 function arranca() {
   tomaDelLink();
   var cache = get(LS.cat);
-  if (cache && get(LS.pin) && get(LS.url)) {
+  if (cache && cache.length > 2 && get(LS.pin) && get(LS.url) && get(LS.quien)) {
     try {
       S.datos = { catalogo: JSON.parse(cache), pendientes: [], hoy: {}, minimo: 1 };
       S.rol = get(LS.quien) || 'JP';
@@ -1041,7 +1046,8 @@ function cobro(x) {
 /* ------------------------------------------------------------------ inventario */
 
 function vInventario(p) {
-  if (!vInventario.lugar) vInventario.lugar = S.rol === 'Franco' ? 'fr' : 'ca';
+  if (S.rol === 'Franco') vInventario.lugar = 'fr';
+  else if (!vInventario.lugar || vInventario.lugar === 'fr') vInventario.lugar = 'ca';
   var lugar = vInventario.lugar;
   p.appendChild(el('h1', null, S.rol === 'Franco' ? 'Mi stock' : 'Inventario'));
   barraCola(p);
@@ -1558,7 +1564,9 @@ function vAjustes() {
 
   var b3 = el('button', 'b', 'Salir y olvidar el PIN de este celular');
   b3.onclick = function () {
-    set(LS.pin, ''); hoja(null); pidePin('');
+    set(LS.pin, ''); set(LS.cat, ''); set(LS.quien, '');
+    S.datos = null; S.rol = ''; vInventario.lugar = '';
+    hoja(null); pidePin('');
   };
   c.appendChild(b3);
   hoja(c);
