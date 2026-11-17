@@ -109,7 +109,18 @@ function sube() {
       subiendo = false;
       if (j && j.ok) {
         var c2 = cola(); c2.shift(); guardaCola(c2);
-        if (c2.length) sube(); else { pinta(); baja(true); }
+        if (c2.length) { sube(); return; }
+        pinta();
+        /* El Sheet tarda un momento en dejar ver lo que se acaba de
+           escribir: si se baja de inmediato, la pantalla contesta con los
+           números de antes y la venta recién hecha aparece en cero.
+           Pasó el 17 nov en la primera prueba en vivo. Por eso se baja
+           dos veces, y la segunda alcanza lo que la primera no vio.
+           Se puede quitar la segunda cuando el script haga flush al
+           guardar; mientras tanto, dos llamadas valen menos que una
+           pantalla que parece haber perdido la venta. */
+        setTimeout(function () { baja(true); }, 1200);
+        setTimeout(function () { baja(true); }, 4500);
       } else { pinta(); }
     })
     .catch(function () { subiendo = false; pinta(); });
