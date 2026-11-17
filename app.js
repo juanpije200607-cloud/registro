@@ -419,19 +419,24 @@ function vInicio(p) {
   }
   p.appendChild(ch);
 
-  /* últimos movimientos del día */
-  if ((h.ultimas || []).length) {
+  /* Últimos movimientos del día, agrupados por venta: una venta de tres
+     sabores es un renglón, no tres. Tocarlo abre deshacer y editar. */
+  var ventasHoy = agrupaVentas(h.ultimas);
+  if (ventasHoy.length) {
     p.appendChild(el('div', 'cap', esJP ? 'Lo último de hoy' : 'Tus ventas de hoy'));
     var gu = el('div', 'group');
-    h.ultimas.slice(0, esJP ? 5 : 8).forEach(function (u) {
-      var ren = el('div', 'ren');
+    ventasHoy.slice(0, esJP ? 5 : 8).forEach(function (g2) {
+      var ren = el('button', 'ren');
+      ren.style.cssText = 'width:100%; border:0; background:none; color:inherit; text-align:left';
       var iz = el('div', 'col');
-      iz.appendChild(el('div', null, (u.pr === '2x' ? '2× ' : '') +
-        u.modelo.split(' ').slice(0, 2).join(' ') + ' · ' + u.sabor));
-      iz.appendChild(el('div', 'mini', u.hora + (esJP && u.quien !== 'JP' ? ' · ' + u.quien : '') +
-        (u.fp === 'Pendiente' ? ' · debe' : '')));
+      iz.appendChild(el('div', null, tituloVenta(g2)));
+      iz.appendChild(el('div', 'mini', g2.hora +
+        (esJP && g2.quien !== 'JP' ? ' · ' + g2.quien : '') +
+        (g2.piezas > 1 ? ' · ' + g2.piezas + ' piezas' : '') +
+        (g2.fp === 'Pendiente' ? ' · debe' : '')));
       ren.appendChild(iz);
-      ren.appendChild(el('div', 'tab-num', pesos(u.monto)));
+      ren.appendChild(el('div', 'tab-num', pesos(g2.monto)));
+      ren.onclick = function () { hojaVenta(g2); };
       gu.appendChild(ren);
     });
     p.appendChild(gu);
@@ -550,11 +555,30 @@ function faltaMaleta() {
 
 function vVenta(p) {
   var v = S.venta;
-  p.appendChild(el('h1', null, 'Venta'));
+  var ed = v.editando;
+  p.appendChild(el('h1', null, ed ? 'Editar venta' : 'Venta'));
   barraCola(p);
   var w = el('div', 'col g16');
   w.style.marginTop = '14px';
   p.appendChild(w);
+
+  if (ed) {
+    var ce = el('div', 'card');
+    var ct2 = el('div', 'alerta', 'Estás corrigiendo la venta de las ' + ed.hora +
+      ' de ' + pesos(ed.monto) + '.');
+    ce.appendChild(ct2);
+    ce.appendChild(el('div', 'mini',
+      'Al guardar se cancela la anterior y se registra esta en su lugar.'));
+    var bsal = el('button', 'b chico', 'Dejarla como estaba');
+    bsal.onclick = function () {
+      S.venta = { de: 'Maleta', mo: '', sas: [], pr: '1', pz: 1, mn: 0,
+                  fp: 'Efectivo', ef: 0, d: '' };
+      S.tab = 'inicio';
+      pinta();
+    };
+    ce.appendChild(bsal);
+    w.appendChild(ce);
+  }
 
   /* Día de la venta. Por defecto hoy; si es otro, se ve fuerte para que
      nadie capture a un día equivocado sin darse cuenta. */
@@ -772,8 +796,9 @@ function vVenta(p) {
   extra.appendChild(mas2);
   w.appendChild(extra);
 
-  var reg = el('button', 'b gde', esHoy ? 'Registrar venta'
-    : 'Registrar venta del ' + fechaBonita(dVenta));
+  var reg = el('button', 'b gde', ed ? 'Guardar cambios'
+    : (esHoy ? 'Registrar venta'
+             : 'Registrar venta del ' + fechaBonita(dVenta)));
   reg.style.cssText = 'width:100%; margin-top:4px';
   reg.disabled = !v.mn && v.fp !== 'Pendiente';
   reg.onclick = function () {
@@ -798,10 +823,22 @@ function vVenta(p) {
     if (!esHoy) {
       nota = (nota ? nota + ' · ' : '') + 'capturada el ' + fechaBonita(hoyISO());
     }
+    /* Editar: primero se cancela la vieja y después se registra la nueva.
+       En ese orden, porque la cola sube en orden y el stock de la pantalla
+       tiene que regresar antes de que la venta nueva lo vuelva a bajar. */
+    if (ed) {
+      nota = (nota ? nota + ' · ' : '') + 'corrige la venta de las ' + ed.hora;
+      revierteLocal(ed);
+      encolaCancelacion(ed, 'Corregida: se volvió a registrar · ' + pesos(ed.monto));
+    }
 
     var efTotal = v.fp === 'Mixto' ? v.ef : (v.fp === 'Efectivo' ? v.mn : 0);
     var suma = grupos.reduce(function (a, g) { return a + g.n; }, 0) || 1;
     var montoRepartido = 0, efRepartido = 0;
+
+    /* Ancla de la venta: el folio de la primera fila, que todas llevan en
+       Ref folio. Es lo que permite deshacerla completa después. */
+    var ancla = folio();
 
     grupos.forEach(function (g, i) {
       var ultimo = i === grupos.length - 1;
@@ -810,6 +847,7 @@ function vVenta(p) {
       var ef = ultimo ? (efTotal - efRepartido) : Math.round(efTotal * g.n / suma);
       montoRepartido += mn; efRepartido += ef;
       encola({
+        f: i === 0 ? ancla : undefined, rf: ancla,
         t: 'Venta', q: v.de === 'Uber' ? 'Uber' : S.rol, mo: v.mo, sa: g.sa, pr: pr,
         d: dVenta, pz: g.n, mn: mn, ef: ef, fp: v.fp,
         cl: v.cl || '', en: i === 0 ? (v.en || 0) : 0, no: nota,
@@ -822,8 +860,9 @@ function vVenta(p) {
                no: 'Entrega en Uber' + (v.cl ? ' a ' + v.cl : '') });
     }
 
-    avisa(grupos.length > 1 ? 'Venta registrada, ' + grupos.length + ' sabores'
-                            : 'Venta registrada');
+    avisa(ed ? 'Venta corregida'
+             : (grupos.length > 1 ? 'Venta registrada, ' + grupos.length + ' sabores'
+                                  : 'Venta registrada'));
     S.venta = { de: v.de, mo: '', sas: [], pr: '1', pz: 1, mn: 0,
                 fp: 'Efectivo', ef: 0, d: esHoy ? '' : dVenta };
     S.tab = 'inicio';
@@ -840,6 +879,188 @@ function agrupaSabores(lista) {
     m[x].n++;
   });
   return orden;
+}
+
+/* ------------------------------------------------- deshacer y editar */
+
+/* Las filas de una misma venta comparten ancla: el folio de la primera,
+   que todas traen en Ref folio. Una fila sin ancla es una venta de una
+   sola fila (así se registraban antes de esta regla). */
+function agrupaVentas(lista) {
+  var orden = [], m = {};
+  (lista || []).forEach(function (u) {
+    var a = u.rf || u.folio;
+    if (!m[a]) {
+      m[a] = { ancla: a, filas: [], piezas: 0, monto: 0 };
+      orden.push(m[a]);
+    }
+    m[a].filas.push(u);
+    m[a].piezas += Number(u.piezas) || 0;
+    m[a].monto += Number(u.monto) || 0;
+  });
+  orden.forEach(function (g) {
+    var p0 = g.filas[0];
+    g.hora = p0.hora; g.quien = p0.quien; g.modelo = p0.modelo;
+    g.pr = p0.pr; g.fp = p0.fp; g.cl = p0.cl || '';
+    g.de = p0.de || ''; g.fecha = p0.fecha || '';
+  });
+  return orden;
+}
+
+function tituloVenta(g) {
+  var corto = String(g.modelo || '').split(' ').slice(0, 2).join(' ');
+  var pre = g.pr === '2x' ? '2× ' : '';
+  if (g.filas.length === 1) return pre + corto + ' · ' + g.filas[0].sabor;
+  return pre + corto + ' · ' + g.filas.length + ' sabores';
+}
+
+/* El stock vuelve a la pantalla al instante. La cancelación viaja como un
+   solo movimiento sin piezas, así que aquí se revierte fila por fila. */
+function revierteLocal(g) {
+  g.filas.forEach(function (x) {
+    if (x.de) {
+      aplicaLocal({ t: 'Cancelación', mo: x.modelo, sa: x.sabor,
+                    pz: Number(x.piezas) || 0, ha: x.de });
+    }
+  });
+  var h = S.datos.hoy || {};
+  h.piezas = Math.max(0, (h.piezas || 0) - g.piezas);
+  h.ingresos = (h.ingresos || 0) - g.monto;
+  if (g.quien === 'Franco') h.franco = Math.max(0, (h.franco || 0) - g.piezas);
+  else h.mias = Math.max(0, (h.mias || 0) - g.piezas);
+  if (S.rol === 'JP' && h.utilidad !== undefined) {
+    /* Aproximación sin comisión: el número exacto llega con la siguiente
+       bajada, en cuanto la cola termine de subir. */
+    var costos = S.datos.costos || {};
+    var ut = 0;
+    g.filas.forEach(function (x) {
+      ut += (Number(x.monto) || 0) -
+            (Number(costos[x.modelo]) || 0) * (Number(x.piezas) || 0);
+    });
+    h.utilidad = (h.utilidad || 0) - ut;
+  }
+  h.ultimas = (h.ultimas || []).filter(function (u) {
+    return (u.rf || u.folio) !== g.ancla;
+  });
+  var ids = {};
+  g.filas.forEach(function (x) { ids[x.folio] = true; });
+  S.datos.pendientes = (S.datos.pendientes || []).filter(function (x) {
+    return !ids[x.folio];
+  });
+}
+
+function encolaCancelacion(g, nota) {
+  encola({ t: 'Cancelación', rf: g.ancla, q: S.rol, no: nota });
+}
+
+/* Se puede deshacer si el script publicado ya lo sabe hacer (v >= 2) y la
+   venta es de hoy. Un botón que no está es mejor que uno que dice que
+   canceló sin haber cancelado nada. */
+function sePuedeDeshacer(g) {
+  if (Number((S.datos || {}).v || 0) < 2) return 'script';
+  if (g.fecha && g.fecha !== hoyISO()) return 'dia';
+  return '';
+}
+
+function hojaVenta(g) {
+  var w = el('div', 'col g12');
+  w.appendChild(el('h1', null, 'Venta de las ' + g.hora));
+  var c = el('div', 'card');
+  g.filas.forEach(function (x) {
+    var ren = el('div', 'ren');
+    var iz = el('div', 'col');
+    iz.appendChild(el('div', null,
+      String(x.modelo).split(' ').slice(0, 2).join(' ') + ' · ' + x.sabor));
+    iz.appendChild(el('div', 'mini',
+      x.piezas + (x.piezas === 1 ? ' pieza' : ' piezas')));
+    ren.appendChild(iz);
+    ren.appendChild(el('div', 'tab-num', pesos(x.monto)));
+    c.appendChild(ren);
+  });
+  var tot = el('div', 'ren');
+  tot.appendChild(el('div', null, 'Total'));
+  var tv = el('div', 'tab-num');
+  tv.style.fontWeight = '700';
+  tv.textContent = pesos(g.monto);
+  tot.appendChild(tv);
+  c.appendChild(tot);
+  c.appendChild(el('div', 'mini',
+    (g.pr === '2x' ? '2× promo · ' : (g.pr === 'Especial' ? 'Especial · ' : '')) +
+    (g.fp === 'Pendiente' ? 'queda a deber' : g.fp) +
+    (g.cl ? ' · ' + g.cl : '') + (g.de ? ' · salió de ' + g.de : '')));
+  w.appendChild(c);
+
+  var no = sePuedeDeshacer(g);
+  if (no) {
+    w.appendChild(el('div', 'mini', no === 'dia'
+      ? 'Solo se deshacen las ventas de hoy. Esta es de otro día: se arregla en el Sheet.'
+      : 'Falta publicar la versión nueva del script para poder deshacer desde aquí.'));
+    var cr = el('button', 'b gde', 'Cerrar');
+    cr.onclick = function () { hoja(null); };
+    w.appendChild(cr);
+    hoja(w);
+    return;
+  }
+
+  var bd = el('button', 'b gde', 'Deshacer esta venta');
+  bd.style.background = 'var(--bad)';
+  bd.style.color = '#fff';
+  bd.onclick = function () { confirmaDeshacer(g); };
+  w.appendChild(bd);
+  var be = el('button', 'b', 'Editarla');
+  be.onclick = function () { hoja(null); abreEdicion(g); };
+  w.appendChild(be);
+  hoja(w);
+}
+
+function confirmaDeshacer(g) {
+  var w = el('div', 'col g12');
+  w.appendChild(el('h1', null, '¿Deshacer?'));
+  w.appendChild(el('div', 'sub', 'Se cancela la venta de ' + pesos(g.monto) +
+    ' y ' + (g.piezas === 1 ? 'una pieza regresa' : g.piezas + ' piezas regresan') +
+    ' al inventario. No se borra nada: queda el rastro de que se deshizo.'));
+  var si = el('button', 'b gde', 'Sí, deshacer');
+  si.style.background = 'var(--bad)';
+  si.style.color = '#fff';
+  si.onclick = function () {
+    hoja(null);
+    revierteLocal(g);
+    encolaCancelacion(g, 'Deshecha la venta de las ' + g.hora + ' · ' + pesos(g.monto));
+    avisa('Venta deshecha');
+    S.tab = 'inicio';
+    pinta();
+  };
+  w.appendChild(si);
+  var mn = el('button', 'b', 'Mejor no');
+  mn.onclick = function () { hoja(null); };
+  w.appendChild(mn);
+  hoja(w);
+}
+
+/* Editar es deshacer y volver a registrar, no corregir en su lugar: un
+   solo camino de código y el historial cuenta lo que de verdad pasó. */
+function abreEdicion(g) {
+  var sas = [];
+  g.filas.forEach(function (x) {
+    for (var i = 0; i < (Number(x.piezas) || 0); i++) sas.push(x.sabor);
+  });
+  S.venta = {
+    editando: g,
+    de: g.quien === 'Uber' ? 'Uber' : (g.de || 'Maleta'),
+    mo: g.modelo,
+    sas: sas,
+    pr: g.pr === '2x' ? '2x' : (g.pr === 'Especial' ? 'esp' : '1'),
+    pz: g.piezas,
+    mn: g.monto,
+    fp: g.fp || 'Efectivo',
+    ef: g.filas.reduce(function (a, x) { return a + (Number(x.ef) || 0); }, 0),
+    en: g.filas.reduce(function (a, x) { return a + (Number(x.en) || 0); }, 0),
+    cl: g.cl || '',
+    no: '',
+    d: ''
+  };
+  S.tab = 'venta';
+  pinta();
 }
 
 function precioLista() {
