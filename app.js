@@ -1791,6 +1791,7 @@ function vInventario(p) {
   if (S.rol === 'JP') {
     var fb = el('div', 'fila g8');
     fb.style.cssText = 'gap:8px; margin-top:12px';
+    fb.style.flexWrap = 'wrap';
     [['Entrada de proveedor', 'Compra a proveedor'], ['Ajuste por conteo', 'Ajuste']]
       .forEach(function (o) {
         var b = el('button', 'b', o[0]);
@@ -1799,6 +1800,15 @@ function vInventario(p) {
         fb.appendChild(b);
       });
     p.appendChild(fb);
+  }
+
+  /* Garantía: pasa seguido pero no a diario, así que es un botón y no una
+     pestaña. Para los dos, en la pantalla donde ya se mueve inventario. */
+  if (scriptSabeGarantia()) {
+    var bg = el('button', 'b', 'Cambio por garantía');
+    bg.style.cssText = 'width:100%; margin-top:8px';
+    bg.onclick = garantia;
+    p.appendChild(bg);
   }
 }
 
@@ -1879,6 +1889,120 @@ function vMovimiento(tipo) {
 /* Lo mismo que rellenarMaleta, pero de la casa de Franco a su maleta.
    Su meta es por modelo, así que los sabores los escoge él: se le
    muestran los del modelo que trae corto, con tope lo que tiene en casa. */
+/* ------------------------------------------------- cambio por garantía */
+
+function scriptSabeGarantia() { return Number((S.datos || {}).v || 0) >= 6; }
+
+/* Son dos piezas, no una: sale una buena del lugar de quien hace el cambio
+   y entra la mala del cliente. Casi nunca son el mismo sabor, porque se
+   cambia por lo que haya. La mala va a Defectuosos, un destino que ninguna
+   fórmula de inventario suma: queda contada sin ensuciar el stock. */
+function garantia() {
+  var lugares = S.rol === 'Franco' ? ['Franco maleta', 'Franco casa'] : ['Maleta', 'Casa'];
+  var d = { de: lugares[0], moOut: '', saOut: '', moIn: '', saIn: '', pz: 1, cl: '' };
+  var cat = function () { return S.datos.catalogo || []; };
+
+  function selec(ops, valor, vacio, cb) {
+    var se = el('select', 'campo');
+    var o0 = el('option', null, vacio);
+    o0.value = '';
+    se.appendChild(o0);
+    ops.forEach(function (x) {
+      var o = el('option', null, x.t);
+      o.value = x.v;
+      if (x.v === valor) o.selected = true;
+      se.appendChild(o);
+    });
+    se.onchange = function () { cb(se.value); };
+    return se;
+  }
+
+  function dibuja() {
+    var campo = lugarACampo(d.de);
+    var hay = cat().filter(function (r) { return (Number(r[campo]) || 0) > 0; });
+
+    var c = el('div', 'col g12');
+    c.appendChild(el('h1', null, 'Cambio por garantía'));
+    c.appendChild(el('div', 'mini',
+      'Sale una buena y entra la que te devolvieron. No cuenta como venta y no genera comisión.'));
+
+    var segl = el('div', 'seg');
+    lugares.forEach(function (l) {
+      var b = el('button', d.de === l ? 'on' : '', nombreLugar(l));
+      b.onclick = function () {
+        d.de = l; d.moOut = ''; d.saOut = ''; hoja(null); dibuja();
+      };
+      segl.appendChild(b);
+    });
+    c.appendChild(segl);
+
+    /* la que entregas */
+    c.appendChild(el('div', 'eti', 'La que entregas'));
+    var mosOut = [];
+    hay.forEach(function (r) { if (mosOut.indexOf(r.mo) < 0) mosOut.push(r.mo); });
+    c.appendChild(selec(mosOut.map(function (m) { return { v: m, t: m }; }), d.moOut,
+      'Modelo…', function (v) { d.moOut = v; d.saOut = ''; hoja(null); dibuja(); }));
+    if (d.moOut) {
+      var sabsOut = hay.filter(function (r) { return r.mo === d.moOut; });
+      c.appendChild(selec(sabsOut.map(function (r) {
+        return { v: r.sa, t: r.sa + '  (' + r[campo] + ')' };
+      }), d.saOut, 'Sabor…', function (v) { d.saOut = v; hoja(null); dibuja(); }));
+    }
+
+    /* la que te devolvieron */
+    c.appendChild(el('div', 'eti', 'La que te devolvieron'));
+    var mosIn = [];
+    cat().forEach(function (r) { if (mosIn.indexOf(r.mo) < 0) mosIn.push(r.mo); });
+    c.appendChild(selec(mosIn.map(function (m) { return { v: m, t: m }; }), d.moIn,
+      'Modelo…', function (v) { d.moIn = v; d.saIn = ''; hoja(null); dibuja(); }));
+    if (d.moIn) {
+      var sabsIn = cat().filter(function (r) { return r.mo === d.moIn; });
+      c.appendChild(selec(sabsIn.map(function (r) { return { v: r.sa, t: r.sa }; }), d.saIn,
+        'Sabor…', function (v) { d.saIn = v; hoja(null); dibuja(); }));
+    }
+
+    var fp = el('div', 'fila');
+    fp.style.gap = '8px';
+    var gp = el('div', 'col g6');
+    gp.style.flex = '1';
+    gp.appendChild(el('div', 'eti', 'Cuántas'));
+    var ip = el('input', 'campo');
+    ip.type = 'tel'; ip.inputMode = 'numeric'; ip.value = d.pz;
+    ip.oninput = function () { d.pz = Math.max(1, Number(ip.value) || 1); };
+    gp.appendChild(ip);
+    var gc = el('div', 'col g6');
+    gc.style.flex = '2';
+    gc.appendChild(el('div', 'eti', 'Cliente'));
+    var ic = el('input', 'campo');
+    ic.value = d.cl;
+    ic.oninput = function () { d.cl = ic.value; };
+    gc.appendChild(ic);
+    fp.appendChild(gp); fp.appendChild(gc);
+    c.appendChild(fp);
+
+    var listo = d.moOut && d.saOut && d.moIn && d.saIn;
+    var b = el('button', 'b gde', 'Registrar el cambio');
+    b.disabled = !listo;
+    b.onclick = function () {
+      var ancla = folio();
+      encola({ f: ancla, rf: ancla, t: 'Garantía', q: S.rol,
+               mo: d.moOut, sa: d.saOut, pz: d.pz, mn: 0,
+               de: d.de, ha: 'Cliente', cl: d.cl,
+               no: 'Garantía · entregada' });
+      encola({ rf: ancla, t: 'Garantía', q: S.rol,
+               mo: d.moIn, sa: d.saIn, pz: d.pz, mn: 0,
+               de: 'Cliente', ha: 'Defectuosos', cl: d.cl,
+               no: 'Garantía · la que devolvió' });
+      hoja(null);
+      avisa('Cambio registrado');
+      pinta();
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
+}
+
 function rellenarMiMaleta() {
   var falta = faltaFranco().filter(function (x) { return x.puedeSolo > 0; });
   if (!falta.length) { avisa('No tienes en tu casa lo que te falta'); return; }
