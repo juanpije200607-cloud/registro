@@ -1216,18 +1216,31 @@ function vVenta(p) {
     'Transferencia a Franco': 'Transfer a mí',
     'Pendiente': 'Debe'
   };
-  w.appendChild(grupo('Cómo paga', formas, v.fp, function (x) {
+  /* 'Mixto a Franco' es un Mixto cuya transferencia le llegó a él. El botón
+     de 'Cómo paga' sigue siendo uno solo, así que para pintarlo encendido se
+     normaliza. */
+  var fpSel = v.fp === 'Mixto a Franco' ? 'Mixto' : v.fp;
+  w.appendChild(grupo('Cómo paga', formas, fpSel, function (x) {
     v.fp = x; pinta();
   }, nombres));
 
-  if (v.fp === 'Mixto') {
+  if (v.fp === 'Mixto' || v.fp === 'Mixto a Franco') {
     var gmx = el('div', 'col g8');
     gmx.appendChild(el('div', 'eti', 'Cuánto en efectivo'));
     var ie = el('input', 'campo');
     ie.type = 'tel'; ie.inputMode = 'numeric'; ie.value = v.ef || '';
     ie.oninput = function () { v.ef = Number(ie.value) || 0; };
     gmx.appendChild(ie);
-    gmx.appendChild(el('div', 'mini', 'El resto se registra como transferencia.'));
+    /* Sin esta pregunta el Mixto de Franco era el único movimiento de la app
+       que no decía dónde cayó el dinero, y de eso depende si lo debe. */
+    if (S.rol === 'Franco') {
+      gmx.appendChild(grupo('El resto, ¿a quién le llegó?',
+        ['Mixto', 'Mixto a Franco'], v.fp,
+        function (x) { v.fp = x; pinta(); },
+        { 'Mixto': 'A JP', 'Mixto a Franco': 'A mí' }));
+    } else {
+      gmx.appendChild(el('div', 'mini', 'El resto se registra como transferencia.'));
+    }
     w.appendChild(gmx);
   }
 
@@ -1273,7 +1286,8 @@ function vVenta(p) {
       encolaCancelacion(ed, 'Corregida: se volvió a registrar · ' + pesos(ed.monto));
     }
 
-    var efTotal = v.fp === 'Mixto' ? v.ef : (v.fp === 'Efectivo' ? v.mn : 0);
+    var efTotal = (v.fp === 'Mixto' || v.fp === 'Mixto a Franco') ? v.ef
+      : (v.fp === 'Efectivo' ? v.mn : 0);
     var suma = grupos.reduce(function (a, g) { return a + g.n; }, 0) || 1;
     var montoRepartido = 0, efRepartido = 0;
 
@@ -1297,7 +1311,11 @@ function vVenta(p) {
     });
 
     if (v.de === 'Uber' && Number(v.uber) > 0) {
+      /* Un gasto que no dice de dónde salió baja el efectivo sin que nada lo
+         sepa: la caja del domingo no cuadra y no hay forma de ver por qué. */
+      var ufp = v.ufp || 'Efectivo';
       encola({ t: 'Gasto', q: 'Uber', mn: Number(v.uber),
+               fp: ufp, ef: ufp === 'Efectivo' ? Number(v.uber) : 0,
                no: 'Entrega en Uber' + (v.cl ? ' a ' + v.cl : '') });
     }
 
@@ -1539,23 +1557,33 @@ function grupo(titulo, ops, sel, cb, nombres) {
 
 function vMasDatos() {
   var v = S.venta;
-  var c = el('div', 'col g16');
-  c.appendChild(el('h1', null, 'Más datos'));
-  var campos = [['cl', 'Cliente', 'text'], ['en', 'Envío cobrado', 'tel'], ['no', 'Nota', 'text']];
-  if (v.de === 'Uber') campos.splice(2, 0, ['uber', 'Lo que le pagas al chofer', 'tel']);
-  campos.forEach(function (x) {
-      var g = el('div', 'col g8');
-      g.appendChild(el('div', 'eti', x[1]));
-      var i = el('input', 'campo');
-      i.type = x[2]; i.value = v[x[0]] || '';
-      i.oninput = function () { v[x[0]] = x[2] === 'tel' ? (Number(i.value) || 0) : i.value; };
-      g.appendChild(i);
-      c.appendChild(g);
-    });
-  var b = el('button', 'b gde', 'Listo');
-  b.onclick = function () { hoja(null); pinta(); };
-  c.appendChild(b);
-  hoja(c);
+  function dibuja() {
+    var c = el('div', 'col g16');
+    c.appendChild(el('h1', null, 'Más datos'));
+    var campos = [['cl', 'Cliente', 'text'], ['en', 'Envío cobrado', 'tel'], ['no', 'Nota', 'text']];
+    if (v.de === 'Uber') campos.splice(2, 0, ['uber', 'Lo que le pagas al chofer', 'tel']);
+    campos.forEach(function (x) {
+        var g = el('div', 'col g8');
+        g.appendChild(el('div', 'eti', x[1]));
+        var i = el('input', 'campo');
+        i.type = x[2]; i.value = v[x[0]] || '';
+        i.oninput = function () { v[x[0]] = x[2] === 'tel' ? (Number(i.value) || 0) : i.value; };
+        g.appendChild(i);
+        c.appendChild(g);
+      });
+    /* De dónde sale el pago al chofer. Casi siempre efectivo, pero si sale de
+       Nu y se registra como efectivo, la caja queda mintiendo. */
+    if (v.de === 'Uber' && Number(v.uber) > 0) {
+      c.appendChild(grupo('El pago al chofer sale de', ['Efectivo', 'Nu'],
+        v.ufp || 'Efectivo', function (x) { v.ufp = x; dibuja(); },
+        { 'Nu': 'Transferencia' }));
+    }
+    var b = el('button', 'b gde', 'Listo');
+    b.onclick = function () { hoja(null); pinta(); };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
 }
 
 /* Si lo que le llego no cuadra, Franco lo dice con sus palabras y JP lo ve.
@@ -1818,6 +1846,10 @@ function vInventario(p) {
         fb.appendChild(b);
       });
     p.appendChild(fb);
+    var bp = el('button', 'b', 'Pagar a proveedor');
+    bp.style.cssText = 'width:100%; margin-top:8px';
+    bp.onclick = pagoProveedor;
+    p.appendChild(bp);
   }
 
   /* Garantía: pasa seguido pero no a diario, así que es un botón y no una
@@ -1877,13 +1909,26 @@ function vMovimiento(tipo) {
     c.appendChild(g);
 
     if (tipo !== 'Ajuste') {
+      /* Es el VALOR de lo que llegó, no lo que pagaste: la mercancía y el
+         dinero van por caminos distintos y casi siempre hay crédito. El pago
+         se registra aparte, con el botón 'Pagar a proveedor'. */
       var g2 = el('div', 'col g8');
-      g2.appendChild(el('div', 'eti', 'Lo que pagaste (opcional)'));
+      g2.appendChild(el('div', 'eti', 'Valor de lo que llegó (opcional)'));
       var i2 = el('input', 'campo');
-      i2.type = 'tel'; i2.inputMode = 'numeric';
+      i2.type = 'tel'; i2.inputMode = 'numeric'; i2.value = d.mn || '';
       i2.oninput = function () { d.mn = Number(i2.value) || 0; };
       g2.appendChild(i2);
+      g2.appendChild(el('div', 'mini',
+        'Lo que vale, aunque no lo hayas pagado. El pago se registra aparte.'));
       c.appendChild(g2);
+      var g3 = el('div', 'col g8');
+      g3.appendChild(el('div', 'eti', '¿A quién le compraste?'));
+      var i3 = el('input', 'campo');
+      i3.type = 'text'; i3.value = d.cl || '';
+      i3.placeholder = 'Aldo, Sean...';
+      i3.oninput = function () { d.cl = i3.value; };
+      g3.appendChild(i3);
+      c.appendChild(g3);
     }
 
     var b = el('button', 'b gde', 'Registrar');
@@ -1892,6 +1937,7 @@ function vMovimiento(tipo) {
       encola({
         t: tipo, q: 'JP', mo: d.mo, sa: d.sa, pz: d.pz, mn: d.mn,
         de: tipo === 'Ajuste' ? '' : 'Proveedor', ha: d.ha,
+        cl: tipo === 'Ajuste' ? '' : String(d.cl || '').trim(),
         no: tipo === 'Ajuste' ? 'Ajuste por conteo en ' + d.ha : ''
       });
       hoja(null); avisa('Registrado'); baja(true);
@@ -2081,9 +2127,13 @@ function garantia() {
                mo: d.moOut, sa: d.saOut, pz: d.pz, mn: 0,
                de: d.de, ha: 'Cliente', cl: d.cl,
                no: 'Garantía · entregada' });
+      /* Dos montones, no uno: si todos los defectuosos caen en el mismo
+         lugar no hay forma de saber si Franco todavía los trae. */
       encola({ rf: ancla, t: 'Garantía', q: S.rol,
                mo: d.moIn, sa: d.saIn, pz: d.pz, mn: 0,
-               de: 'Cliente', ha: 'Defectuosos', cl: d.cl,
+               de: 'Cliente',
+               ha: S.rol === 'Franco' ? 'Defectuosos Franco' : 'Defectuosos',
+               cl: d.cl,
                no: 'Garantía · la que devolvió' });
       hoja(null);
       avisa('Cambio registrado');
@@ -2292,24 +2342,94 @@ function vFranco(p) {
 }
 
 function pagoFranco() {
-  var d = { mn: 0 };
-  var c = el('div', 'col g16');
-  c.appendChild(el('h1', null, 'Franco te pagó'));
-  var g = el('div', 'col g8');
-  g.appendChild(el('div', 'eti', 'Cuánto te dio'));
-  var i = el('input', 'campo');
-  i.type = 'tel'; i.inputMode = 'numeric';
-  i.oninput = function () { d.mn = Number(i.value) || 0; };
-  g.appendChild(i);
-  c.appendChild(g);
-  var b = el('button', 'b gde', 'Registrar pago');
-  b.onclick = function () {
-    if (!d.mn) { avisa('Falta el monto'); return; }
-    encola({ t: 'Pago de vendedor', q: 'Franco', mn: d.mn, fp: 'Efectivo', ef: d.mn });
-    hoja(null); avisa('Pago registrado'); baja(true);
-  };
-  c.appendChild(b);
-  hoja(c);
+  var d = { mn: 0, fp: 'Efectivo', ef: 0 };
+  function dibuja() {
+    var c = el('div', 'col g16');
+    c.appendChild(el('h1', null, 'Franco te pagó'));
+    var g = el('div', 'col g8');
+    g.appendChild(el('div', 'eti', 'Cuánto te dio'));
+    var i = el('input', 'campo');
+    i.type = 'tel'; i.inputMode = 'numeric'; i.value = d.mn || '';
+    i.oninput = function () { d.mn = Number(i.value) || 0; };
+    g.appendChild(i);
+    c.appendChild(g);
+    /* Antes se forzaba 'Efectivo'. Si Franco transfería su corte quedaba
+       registrado como efectivo, y la caja de JP no podía cuadrar nunca. */
+    c.appendChild(grupo('Cómo te pagó', ['Efectivo', 'Nu', 'Mixto'], d.fp,
+      function (x) { d.fp = x; dibuja(); }, { 'Nu': 'Transferencia' }));
+    if (d.fp === 'Mixto') {
+      var gm = el('div', 'col g8');
+      gm.appendChild(el('div', 'eti', 'Cuánto en efectivo'));
+      var ie = el('input', 'campo');
+      ie.type = 'tel'; ie.inputMode = 'numeric'; ie.value = d.ef || '';
+      ie.oninput = function () { d.ef = Number(ie.value) || 0; };
+      gm.appendChild(ie);
+      gm.appendChild(el('div', 'mini', 'El resto se registra como transferencia.'));
+      c.appendChild(gm);
+    }
+    var b = el('button', 'b gde', 'Registrar pago');
+    b.onclick = function () {
+      if (!d.mn) { avisa('Falta el monto'); return; }
+      var ef = d.fp === 'Efectivo' ? d.mn : (d.fp === 'Mixto' ? d.ef : 0);
+      if (d.fp === 'Mixto' && (ef <= 0 || ef >= d.mn)) {
+        avisa('En mixto el efectivo va entre 1 y ' + (d.mn - 1)); return;
+      }
+      encola({ t: 'Pago de vendedor', q: 'Franco', mn: d.mn, fp: d.fp, ef: ef });
+      hoja(null); avisa('Pago registrado'); baja(true);
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
+}
+
+/* Pagarle al proveedor es un movimiento propio y no un campo de la entrada:
+   la mercancía llega un día y el dinero sale otro, y casi siempre a crédito.
+   Deuda con un proveedor = lo que le has comprado menos lo que le has pagado. */
+function pagoProveedor() {
+  var d = { mn: 0, fp: 'Efectivo', cl: '', no: '' };
+  function dibuja() {
+    var c = el('div', 'col g16');
+    c.appendChild(el('h1', null, 'Pagar a proveedor'));
+    var g0 = el('div', 'col g8');
+    g0.appendChild(el('div', 'eti', '¿A quién le pagaste?'));
+    var i0 = el('input', 'campo');
+    i0.type = 'text'; i0.value = d.cl;
+    i0.placeholder = 'Aldo, Sean...';
+    i0.oninput = function () { d.cl = i0.value; };
+    g0.appendChild(i0);
+    c.appendChild(g0);
+    var g = el('div', 'col g8');
+    g.appendChild(el('div', 'eti', 'Cuánto le pagaste'));
+    var i = el('input', 'campo');
+    i.type = 'tel'; i.inputMode = 'numeric'; i.value = d.mn || '';
+    i.oninput = function () { d.mn = Number(i.value) || 0; };
+    g.appendChild(i);
+    c.appendChild(g);
+    c.appendChild(grupo('De dónde salió', ['Efectivo', 'Nu', 'TDC'], d.fp,
+      function (x) { d.fp = x; dibuja(); },
+      { 'Nu': 'Transferencia', 'TDC': 'Tarjeta' }));
+    var gn = el('div', 'col g8');
+    gn.appendChild(el('div', 'eti', 'Nota (opcional)'));
+    var inn = el('input', 'campo');
+    inn.type = 'text'; inn.value = d.no;
+    inn.placeholder = 'De qué pedido fue';
+    inn.oninput = function () { d.no = inn.value; };
+    gn.appendChild(inn);
+    c.appendChild(gn);
+    var b = el('button', 'b gde', 'Registrar pago');
+    b.onclick = function () {
+      if (!d.cl.trim()) { avisa('Falta a quién le pagaste'); return; }
+      if (!d.mn) { avisa('Falta el monto'); return; }
+      encola({ t: 'Pago a proveedor', q: 'JP', mn: d.mn, fp: d.fp,
+               ef: d.fp === 'Efectivo' ? d.mn : 0,
+               cl: d.cl.trim(), no: d.no });
+      hoja(null); avisa('Pago registrado'); baja(true);
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
 }
 
 function surtido(pedido) {
