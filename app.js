@@ -650,6 +650,24 @@ function vInicio(p) {
       gj.appendChild(renr);
     });
 
+    var huerfanos = saboresQueFrancoTieneYJPNo();
+    if (huerfanos.length) {
+      var pzh = huerfanos.reduce(function (a, r) {
+        return a + (Number(r.frc) || 0) + (Number(r.frm) || 0);
+      }, 0);
+      var renh = el('div', 'ren');
+      var izh = el('div', 'col');
+      izh.appendChild(el('div', 'alerta', 'Pídele ' + pzh + ' piezas a Franco'));
+      izh.appendChild(el('div', 'mini', 'trae ' + huerfanos.length +
+        (huerfanos.length === 1 ? ' sabor que tú ya no tienes' : ' sabores que tú ya no tienes') +
+        ': ' + huerfanos.slice(0, 2).map(function (r) { return r.sa; }).join(' · ') +
+        (huerfanos.length > 2 ? ' y más' : '')));
+      renh.appendChild(izh);
+      renh.appendChild(el('div', 'mini', '›'));
+      renh.onclick = function () { devolucionDeFranco(true); };
+      gj.appendChild(renh);
+    }
+
     var sf = S.datos.saldoFranco;
     if (sf) {
       var ren2 = el('div', 'ren');
@@ -1889,6 +1907,80 @@ function vMovimiento(tipo) {
 /* Lo mismo que rellenarMaleta, pero de la casa de Franco a su maleta.
    Su meta es por modelo, así que los sabores los escoge él: se le
    muestran los del modelo que trae corto, con tope lo que tiene en casa. */
+/* ----------------------------------- sabores que Franco tiene y JP no */
+
+/* Regla de JP (18 nov): si Franco trae un sabor que a JP ya se le acabó,
+   hay que pedírselo de vuelta. Es stock muerto en manos del repartidor
+   mientras JP no tiene nada que vender de ese sabor. */
+function saboresQueFrancoTieneYJPNo() {
+  return (S.datos.catalogo || []).filter(function (r) {
+    return (Number(r.ca) || 0) === 0 &&
+           ((Number(r.frc) || 0) + (Number(r.frm) || 0)) > 0;
+  });
+}
+
+/* JP recibe piezas de vuelta de Franco. Es el camino contrario al
+   surtido, que hasta hoy era de una sola dirección. */
+function devolucionDeFranco(soloFaltantes) {
+  var lista = soloFaltantes ? saboresQueFrancoTieneYJPNo()
+    : (S.datos.catalogo || []).filter(function (r) {
+        return ((Number(r.frc) || 0) + (Number(r.frm) || 0)) > 0;
+      });
+  if (!lista.length) { avisa('Franco no tiene nada que regresarte'); return; }
+  var sel = {};
+
+  function dibuja() {
+    var c = el('div', 'col g12');
+    c.appendChild(el('h1', null, 'Franco te regresó'));
+    c.appendChild(el('div', 'mini', soloFaltantes
+      ? 'Sabores que él trae y tú ya no tienes en casa. Las piezas regresan a tu Casa.'
+      : 'Lo que te devuelva regresa a tu Casa.'));
+    var cuerpo = el('div', 'col g6');
+    cuerpo.style.cssText = 'max-height:48vh; overflow-y:auto';
+    lista.forEach(function (r) {
+      [['frc', 'Franco casa', 'su casa'], ['frm', 'Franco maleta', 'su maleta']]
+        .forEach(function (lu) {
+          var n = Number(r[lu[0]]) || 0;
+          if (!n) return;
+          var k = r.mo + '|' + r.sa + '|' + lu[1];
+          var ren = el('div', 'ren');
+          var izq = el('div', 'col');
+          izq.appendChild(el('div', null, r.sa));
+          izq.appendChild(el('div', 'mini',
+            r.mo.split(' ').slice(0, 2).join(' ') + ' · ' + n + ' en ' + lu[2]));
+          ren.appendChild(izq);
+          var f = el('div', 'fila');
+          f.style.gap = '8px';
+          var menos = el('button', 'b chico', '−'); menos.style.minWidth = '38px';
+          var num = el('div', null, String(sel[k] || 0));
+          num.style.cssText = 'min-width:22px; text-align:center; font-weight:600';
+          var mas = el('button', 'b chico', '+'); mas.style.minWidth = '38px';
+          menos.onclick = function () { sel[k] = Math.max(0, (sel[k] || 0) - 1); hoja(null); dibuja(); };
+          mas.onclick = function () { sel[k] = Math.min(n, (sel[k] || 0) + 1); hoja(null); dibuja(); };
+          f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
+          ren.appendChild(f);
+          cuerpo.appendChild(ren);
+        });
+    });
+    c.appendChild(cuerpo);
+    var tot = Object.keys(sel).reduce(function (a, k) { return a + sel[k]; }, 0);
+    var b = el('button', 'b gde', tot ? 'Recibí ' + tot + ' piezas' : 'Recibí');
+    b.disabled = !tot;
+    b.onclick = function () {
+      Object.keys(sel).forEach(function (k) {
+        if (!sel[k]) return;
+        var p = k.split('|');
+        encola({ t: 'Devolución', q: 'JP', mo: p[0], sa: p[1], pz: sel[k],
+                 de: p[2], ha: 'Casa', no: 'Franco regresó piezas' });
+      });
+      hoja(null); avisa('Devolución registrada'); pinta();
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
+}
+
 /* ------------------------------------------------- cambio por garantía */
 
 function scriptSabeGarantia() { return Number((S.datos || {}).v || 0) >= 6; }
@@ -2182,6 +2274,15 @@ function vFranco(p) {
   renm.appendChild(el('div', 'mini', '›'));
   renm.onclick = function () { S.tab = 'meta'; pinta(); };
   gm.appendChild(renm);
+
+  var rend = el('div', 'ren');
+  var izd = el('div', 'col');
+  izd.appendChild(el('div', null, 'Me regresó piezas'));
+  izd.appendChild(el('div', 'mini', 'regresan a tu Casa'));
+  rend.appendChild(izd);
+  rend.appendChild(el('div', 'mini', '›'));
+  rend.onclick = function () { devolucionDeFranco(false); };
+  gm.appendChild(rend);
   p.appendChild(gm);
 
   var bs = el('button', 'b', 'Surtirle de casa');
