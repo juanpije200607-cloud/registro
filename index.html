@@ -130,10 +130,37 @@ a{color:var(--ink-2)}
 </style>
 </head>
 <body>
-<div id="pantalla"><div class="wrap"></div></div>
+<div id="pantalla"><div class="wrap"><div class="sub" id="arranque">Abriendo…</div></div></div>
 <nav id="nav"></nav>
 <div id="aviso"></div>
 <div id="hoja"><div id="hojaIn"></div></div>
-<script src="app.js?v=22"></script>
+
+<!-- Red de seguridad del arranque. Va EN el index y no en app.js a
+     propósito: si el que no llega es app.js, cualquier aviso que viviera
+     ahí tampoco llegaría. Sin esto, la app que no arranca se ve como una
+     pantalla negra, sin una sola palabra. Pasó el 20 nov con datos
+     móviles: el index cargaba (de ahí el negro, que es el fondo del modo
+     oscuro) y app.js no, y no había forma de saberlo desde el teléfono. -->
+<script>
+function vqFallo(motivo) {
+  var w = document.querySelector('#pantalla .wrap');
+  if (!w || window.vqListo) return;
+  w.innerHTML = '';
+  var h = document.createElement('h1'); h.textContent = 'No abrió';
+  var p = document.createElement('div'); p.className = 'sub';
+  p.textContent = 'La app no se pudo cargar: ' + motivo +
+    '. Casi siempre es la señal. Con wifi suele entrar a la primera.';
+  var b = document.createElement('button'); b.className = 'b gde';
+  b.textContent = 'Reintentar';
+  b.onclick = function () { location.reload(); };
+  w.appendChild(h); w.appendChild(p); w.appendChild(b);
+}
+</script>
+<script src="app.js?v=23" onerror="vqFallo('no se bajó app.js')"></script>
+<script>
+/* app.js corre de corrido, así que para cuando llega aquí ya puso vqListo.
+   Si no está, llegó pero tronó a la mitad. */
+if (!window.vqListo) vqFallo('se bajó pero no arrancó');
+</script>
 </body>
 </html>

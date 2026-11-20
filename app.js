@@ -2718,3 +2718,8 @@ function vAjustes() {
 }
 
 arranca();
+/* Le avisa al index que app.js llegó entero y arrancó sin tronar. Va
+   DESPUÉS de arranca() a propósito: si arranca() truena, esto no se pone
+   y el index lo dice. Sin esta red, la app que no arranca se ve como una
+   pantalla negra, sin una sola palabra: pasó el 20 nov con datos móviles. */
+try { window.vqListo = true; } catch (e) {}
