@@ -332,11 +332,15 @@ function barraCola(p) {
      Un cero falso es peor que un error, así que aquí se dice con palabras.
      Pasó el 20 nov: JP veía a Vale y a Parrodi en nada, y a Franco en cero,
      con el script contestando los dos pendientes y sus $1,755. */
+  /* Dos estados distintos, y confundirlos es gritar que el lobo viene:
+     mientras la bajada va en camino solo se avisa que lo que se ve es lo
+     guardado; el renglón rojo es para cuando de verdad falló. */
   if (S.datos && S.datos.viejo) {
-    p.appendChild(el('div', 'cola malo',
-      'Datos guardados en este teléfono. No se pudo actualizar' +
-      (S.datos.porQue ? ': ' + S.datos.porQue : '') +
-      '. Por cobrar y lo de Franco NO se están mostrando.'));
+    p.appendChild(S.datos.porQue
+      ? el('div', 'cola malo',
+          'Datos guardados en este teléfono. No se pudo actualizar: ' +
+          S.datos.porQue + '. Por cobrar y lo de Franco NO se están mostrando.')
+      : el('div', 'cola', 'Actualizando… lo que ves es lo guardado en este teléfono.'));
   }
   var c = cola();
   if (!c.length) return;
