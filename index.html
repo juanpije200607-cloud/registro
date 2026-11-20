@@ -135,39 +135,2756 @@ a{color:var(--ink-2)}
 <div id="aviso"></div>
 <div id="hoja"><div id="hojaIn"></div></div>
 
-<!-- Red de seguridad del arranque. Va EN el index y no en app.js a
-     propósito: si el que no llega es app.js, cualquier aviso que viviera
-     ahí tampoco llegaría. Sin esto, la app que no arranca se ve como una
-     pantalla negra, sin una sola palabra. Pasó el 20 nov con datos
-     móviles: el index cargaba (de ahí el negro, que es el fondo del modo
-     oscuro) y app.js no, y no había forma de saberlo desde el teléfono. -->
+<!-- La app va INCRUSTADA, no en un app.js aparte, y es a proposito.
+     Eran dos descargas: el index y el script. Con mala senal la primera
+     llegaba y la segunda se colgaba, y quedaba una pantalla negra -el
+     fondo del modo oscuro- sin una sola palabra. Le paso a JP y a Franco
+     con datos moviles el 20 nov. Una sola descarga: si llega esto, llega
+     la app entera. Editar aqui; ya no existe app.js. -->
 <script>
-function vqFallo(motivo) {
-  var w = document.querySelector('#pantalla .wrap');
-  if (!w || window.vqListo) return;
-  w.innerHTML = '';
-  var h = document.createElement('h1'); h.textContent = 'No abrió';
-  var p = document.createElement('div'); p.className = 'sub';
-  p.textContent = 'La app no se pudo cargar: ' + motivo +
-    '. Casi siempre es la señal. Con wifi suele entrar a la primera.';
-  var b = document.createElement('button'); b.className = 'b gde';
-  b.textContent = 'Reintentar';
-  b.onclick = function () { location.reload(); };
-  w.appendChild(h); w.appendChild(p); w.appendChild(b);
+/* Vapor QRO · app de captura
+   - La dirección del script y el PIN se guardan en el celular, no en el código.
+   - Funciona sin señal: cada toque se encola con su folio y se sube después.
+   - No hay precios ni costos aquí: bajan del Sheet. */
+
+var LS = {
+  url: 'vq.url', pin: 'vq.pin', cat: 'vq.cat', cola: 'vq.cola', quien: 'vq.quien'
+};
+var S = {
+  rol: '', datos: null, tab: 'inicio',
+  venta: { de: 'Maleta', mo: '', sas: [], pr: '1', pz: 1, mn: 0, fp: 'Efectivo', ef: 0, d: '' },
+  res: { per: 'dia', dim: 'modelo', data: null, dia: '' }
+};
+
+var $ = function (s) { return document.querySelector(s); };
+var el = function (t, c, x) {
+  var n = document.createElement(t);
+  if (c) n.className = c;
+  if (x !== undefined) n.textContent = x;
+  return n;
+};
+var get = function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } };
+var set = function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} };
+var pesos = function (n) {
+  return '$' + (Math.round(Number(n) || 0)).toLocaleString('es-MX');
+};
+var hoyISO = function () {
+  var d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+};
+var horaLocal = function () {
+  var d = new Date();
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+};
+var fechaBonita = function (iso) {
+  var p = String(iso || '').split('-');
+  if (p.length !== 3) return String(iso || '');
+  var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  return d.toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' });
+};
+var folio = function () {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+};
+function avisa(t) {
+  var a = $('#aviso');
+  a.textContent = t; a.classList.add('ver');
+  clearTimeout(avisa.t);
+  avisa.t = setTimeout(function () { a.classList.remove('ver'); }, 2200);
 }
-/* El caso que de verdad pasa con mala señal no es que app.js falle: es
-   que NUNCA TERMINA DE LLEGAR. Ahí onerror no dispara nunca y el de
-   abajo tampoco corre, porque el navegador sigue esperando el script.
-   Por eso hace falta un reloj, y por eso arranca aquí, antes de pedirlo.
-   JP, 20 nov: "en la parte de abajo se ve que no acaba de cargar y la
-   pantalla negra". */
-setTimeout(function () { vqFallo('está tardando demasiado'); }, 10000);
+function hoja(contenido) {
+  var h = $('#hoja'), i = $('#hojaIn');
+  i.innerHTML = '';
+  if (!contenido) { h.classList.remove('ver'); return; }
+  i.appendChild(contenido);
+  h.classList.add('ver');
+}
+$('#hoja').addEventListener('click', function (e) { if (e.target.id === 'hoja') hoja(null); });
+
+/* ------------------------------------------------------------------ red */
+
+function cola() { try { return JSON.parse(get(LS.cola) || '[]'); } catch (e) { return []; } }
+function guardaCola(c) { set(LS.cola, JSON.stringify(c)); }
+
+function encola(mov) {
+  mov.f = mov.f || folio();
+  /* Si el movimiento ya trae fecha (una venta de otro día), se respeta. */
+  mov.d = mov.d || hoyISO();
+  mov.h = mov.h || horaLocal();
+  var c = cola(); c.push(mov); guardaCola(c);
+  aplicaLocal(mov);
+  sube();
+}
+
+/* Mueve el stock en la copia local para que la pantalla responda sin señal.
+   Vale para todos los movimientos, no solo las ventas: si solo moviera
+   ventas, un surtido se registraba pero la pantalla seguía igual y uno
+   acababa apretando el botón dos veces. */
+/* Cuatro lugares. Franco tiene su casa y su maleta igual que JP: su meta
+   es de su maleta, y rellenarla desde su casa es su movimiento diario. */
+function lugarACampo(l) {
+  if (l === 'Casa') return 'ca';
+  if (l === 'Maleta') return 'ma';
+  if (l === 'Franco casa') return 'frc';
+  if (l === 'Franco maleta') return 'frm';
+  return '';
+}
+function nombreLugar(l) {
+  if (S.rol !== 'Franco') return l;
+  if (l === 'Franco casa') return 'Mi casa';
+  if (l === 'Franco maleta') return 'Mi maleta';
+  return l;
+}
+function aplicaLocal(mov) {
+  if (!S.datos || !S.datos.catalogo) return;
+  var pz = Number(mov.pz) || 0;
+  if (!pz || !mov.mo || !mov.sa) return;
+  var de = lugarACampo(mov.de), ha = lugarACampo(mov.ha);
+  S.datos.catalogo.forEach(function (r) {
+    if (r.mo !== mov.mo || r.sa !== mov.sa) return;
+    if (mov.t === 'Ajuste') { if (ha) r[ha] = pz; }
+    else {
+      if (de) r[de] = Math.max(0, r[de] - pz);
+      if (ha) r[ha] = r[ha] + pz;
+    }
+    /* fr es la suma de los dos lugares de Franco; se recalcula para que
+       las pantallas que miran su total no se queden atrás. */
+    r.fr = (Number(r.frc) || 0) + (Number(r.frm) || 0);
+  });
+  set(LS.cat, JSON.stringify(S.datos.catalogo));
+}
+
+var subiendo = false;
+function sube() {
+  if (subiendo || !navigator.onLine) { pinta(); return; }
+  var c = cola();
+  if (!c.length) { pinta(); return; }
+  subiendo = true;
+  var mov = c[0];
+  var q = Object.keys(mov).map(function (k) {
+    return k + '=' + encodeURIComponent(mov[k]);
+  }).join('&');
+  fetch(get(LS.url) + '?action=guardar&pin=' + encodeURIComponent(get(LS.pin)) + '&' + q)
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      subiendo = false;
+      if (j && j.ok) {
+        var c2 = cola(); c2.shift(); guardaCola(c2);
+        if (c2.length) { sube(); return; }
+        pinta();
+        /* El Sheet tarda un momento en dejar ver lo que se acaba de
+           escribir: si se baja de inmediato, la pantalla contesta con los
+           números de antes y la venta recién hecha aparece en cero.
+           Pasó el 17 nov en la primera prueba en vivo. Por eso se baja
+           dos veces, y la segunda alcanza lo que la primera no vio.
+           Se puede quitar la segunda cuando el script haga flush al
+           guardar; mientras tanto, dos llamadas valen menos que una
+           pantalla que parece haber perdido la venta. */
+        setTimeout(function () { baja(true); }, 1200);
+        setTimeout(function () { baja(true); }, 4500);
+      } else { pinta(); }
+    })
+    .catch(function () { subiendo = false; pinta(); });
+}
+window.addEventListener('online', sube);
+
+function baja(silencio) {
+  if (!navigator.onLine) {
+    if (S.datos) { if (!silencio) avisa('Sin señal'); }
+    else pidePin('Sin señal. Conéctate y vuelve a entrar.');
+    return;
+  }
+  var url = (get(LS.url) || '').trim().split('?')[0];
+  fetch(url + '?pin=' + encodeURIComponent(get(LS.pin)))
+    .then(function (r) {
+      if (!r.ok) throw new Error('el servidor contestó ' + r.status);
+      return r.text();
+    })
+    .then(function (t) {
+      var j;
+      try { j = JSON.parse(t); }
+      catch (e) {
+        throw new Error('la dirección no devolvió datos. Revisa que termine en /exec y que el script esté publicado para cualquier usuario');
+      }
+      if (!j.ok) {
+        pidePin(j.error === 'pin' ? 'Ese PIN no es. Revísalo en Ajustes del Sheet.'
+          : 'El script contestó un error: ' + (j.error || 'desconocido'));
+        return;
+      }
+      S.rol = j.rol; S.datos = j;
+      set(LS.cat, JSON.stringify(j.catalogo));
+      pinta();
+    })
+    .catch(function (e) {
+      if (!S.datos) {
+        pidePin('No se pudo conectar: ' + (e.message || 'falló la conexión'));
+        return;
+      }
+      /* Si lo que está en pantalla es el esqueleto del cache, el usuario
+         está viendo ceros falsos: se le dice aunque la bajada fuera
+         silenciosa, porque nadie le pidió nada y aun así le mentimos. */
+      if (S.datos.viejo) {
+        S.datos.porQue = e.message || 'falló la conexión';
+        pinta();
+        return;
+      }
+      if (!silencio) avisa('No se pudo actualizar');
+    });
+}
+
+function bajaResultados() {
+  var iso = function (x) {
+    return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' +
+      String(x.getDate()).padStart(2, '0');
+  };
+  var desdeISO, hastaISO;
+  if (S.res.per === 'dia') {
+    desdeISO = hastaISO = (S.res.dia || hoyISO());
+  } else {
+    var d = new Date(), desde = new Date(d);
+    desde.setDate(d.getDate() - (S.res.per === 'semana' ? 6 : 29));
+    desdeISO = iso(desde); hastaISO = hoyISO();
+  }
+  fetch(get(LS.url) + '?action=resultados&pin=' + encodeURIComponent(get(LS.pin)) +
+    '&desde=' + desdeISO + '&hasta=' + hastaISO)
+    .then(function (r) { return r.json(); })
+    .then(function (j) { if (j && j.ok) { S.res.data = j; pinta(); } })
+    .catch(function () { avisa('No se pudieron traer los resultados'); });
+}
+
+/* ------------------------------------------------------------------ arranque */
+
+function pidePin(msg) {
+  var c = el('div', 'col g16');
+  c.appendChild(el('h1', null, 'Registro'));
+  if (msg) c.appendChild(el('div', 'sub', msg));
+
+  c.appendChild(el('div', 'eti', 'Dirección del script'));
+  var u = el('input', 'campo');
+  u.type = 'url'; u.placeholder = 'https://script.google.com/...';
+  u.value = get(LS.url) || '';
+  u.style.fontSize = '14px';
+  c.appendChild(u);
+  c.appendChild(el('div', 'mini',
+    'Se pega una vez por celular y se queda guardada. Tiene que terminar en /exec.'));
+  c.u = u;
+
+  c.appendChild(el('div', 'eti', 'Tu PIN'));
+  var p = el('input', 'campo');
+  p.type = 'tel'; p.inputMode = 'numeric'; p.placeholder = '····';
+  c.appendChild(p);
+
+  var b = el('button', 'b gde', 'Entrar');
+  b.onclick = function () {
+    var dir = (c.u.value || '').trim().split('?')[0];
+    if (!dir) { avisa('Falta la dirección'); return; }
+    if (dir.indexOf('/exec') < 0) { avisa('La dirección debe terminar en /exec'); return; }
+    set(LS.url, dir);
+    if (!p.value.trim()) { avisa('Falta el PIN'); return; }
+    /* Entrar con un PIN borra lo que quedo del anterior: nadie debe ver,
+       ni un instante, datos de la sesion de otro en el mismo telefono. */
+    set(LS.cat, ''); set(LS.quien, '');
+    S.datos = null; S.rol = ''; S.tab = 'inicio';
+    vInventario.lugar = '';
+    set(LS.pin, p.value.trim());
+    $('#pantalla .wrap').innerHTML = '';
+    $('#pantalla .wrap').appendChild(el('div', 'sub', 'Entrando…'));
+    baja();
+  };
+  c.appendChild(b);
+
+  $('#nav').innerHTML = '';
+  $('#pantalla .wrap').innerHTML = '';
+  $('#pantalla .wrap').appendChild(c);
+}
+
+/* JP le manda un link con la direccion del script adentro, para que
+   Franco solo teclee su PIN y no tenga que pegar nada. */
+function tomaDelLink() {
+  var h = location.hash || '';
+  var m = h.match(/[#&]s=([^&]+)/);
+  if (!m) return;
+  try {
+    var dir = decodeURIComponent(m[1]).trim().split('?')[0];
+    if (dir.indexOf('/exec') > 0) set(LS.url, dir);
+  } catch (e) {}
+  try { history.replaceState(null, '', location.pathname); } catch (e) { location.hash = ''; }
+}
+
+function arranca() {
+  tomaDelLink();
+  var cache = get(LS.cat);
+  if (cache && cache.length > 2 && get(LS.pin) && get(LS.url) && get(LS.quien)) {
+    try {
+      /* viejo: esto es el esqueleto del cache, no los datos de verdad.
+         Lo limpia la bajada al reemplazar S.datos; mientras siga puesto,
+         la pantalla lo dice (ver barraCola). */
+      S.datos = { catalogo: JSON.parse(cache), pendientes: [], hoy: {},
+                  minimo: 1, viejo: true };
+      S.rol = get(LS.quien) || 'JP';
+      pinta();
+    } catch (e) {}
+  }
+  if (!get(LS.pin) || !get(LS.url)) { pidePin(''); return; }
+  baja(true);
+}
+
+/* ------------------------------------------------------------------ pintar */
+
+function pinta() {
+  if (!S.datos) return;
+  set(LS.quien, S.rol);
+  var p = $('#pantalla .wrap');
+  p.innerHTML = '';
+  /* Solo al cambiar de pestaña: si se reiniciara en cada repintado,
+     elegir un sabor te brincaría al inicio de la pantalla. */
+  if (pinta.ultima !== S.tab) { $('#pantalla').scrollTop = 0; pinta.ultima = S.tab; }
+  ({
+    inicio: vInicio, venta: vVenta, pend: vPendientes,
+    inv: vInventario, franco: vFranco, res: vResultados,
+    meta: vMeta, pedir: vPedir
+  }[S.tab] || vInicio)(p);
+  pintaNav();
+}
+
+function pintaNav() {
+  var n = $('#nav');
+  n.innerHTML = '';
+  var tabs = (S.rol === 'Franco')
+    ? [['inicio', '◎', 'Inicio'], ['venta', '＋', 'Venta'], ['inv', '▦', 'Mi stock'],
+       ['meta', '◉', 'Mi meta']]
+    : [['inicio', '◎', 'Inicio'], ['venta', '＋', 'Venta'], ['inv', '▦', 'Inventario'],
+       ['franco', '◍', 'Franco'], ['res', '◴', 'Resultados']];
+  tabs.forEach(function (t) {
+    var b = el('button', S.tab === t[0] ? 'on' : '');
+    b.appendChild(el('i', null, t[1]));
+    b.appendChild(el('span', null, t[2]));
+    b.onclick = function () {
+      S.tab = t[0];
+      if (t[0] === 'res' && !S.res.data) { pinta(); bajaResultados(); return; }
+      pinta();
+    };
+    n.appendChild(b);
+  });
+}
+
+function barraCola(p) {
+  /* Al arrancar se pinta el catálogo guardado en el teléfono, pero sin
+     pendientes y sin el saldo de Franco: esos llegan con la bajada. Si la
+     bajada falla, la pantalla se queda enseñando CEROS que no son ciertos
+     —"Por cobrar" vacío, Franco en cero— y parece que cargó bien.
+     Un cero falso es peor que un error, así que aquí se dice con palabras.
+     Pasó el 20 nov: JP veía a Vale y a Parrodi en nada, y a Franco en cero,
+     con el script contestando los dos pendientes y sus $1,755. */
+  /* Dos estados distintos, y confundirlos es gritar que el lobo viene:
+     mientras la bajada va en camino solo se avisa que lo que se ve es lo
+     guardado; el renglón rojo es para cuando de verdad falló. */
+  if (S.datos && S.datos.viejo) {
+    p.appendChild(S.datos.porQue
+      ? el('div', 'cola malo',
+          'Datos guardados en este teléfono. No se pudo actualizar: ' +
+          S.datos.porQue + '. Por cobrar y lo de Franco NO se están mostrando.')
+      : el('div', 'cola', 'Actualizando… lo que ves es lo guardado en este teléfono.'));
+  }
+  var c = cola();
+  if (!c.length) return;
+  var d = el('div', 'cola', c.length + (c.length === 1
+    ? ' movimiento esperando señal' : ' movimientos esperando señal'));
+  p.appendChild(d);
+}
+
+/* ------------------------------------------------------------------ inicio */
+
+function vInicio(p) {
+  var h = S.datos.hoy || {};
+  var esJP = S.rol === 'JP';
+
+  var cab = el('div', 'fila');
+  var izq = el('div', 'col');
+  izq.appendChild(el('h1', null, esJP ? 'Hoy' : 'Hola, Franco'));
+  izq.appendChild(el('div', 'sub', new Date().toLocaleDateString('es-MX',
+    { weekday: 'long', day: 'numeric', month: 'long' })));
+  cab.appendChild(izq);
+  var g = el('button', 'b chico', 'Ajustes');
+  g.onclick = vAjustes;
+  cab.appendChild(g);
+  p.appendChild(cab);
+  barraCola(p);
+
+  /* lo del día */
+  var c = el('div', 'card');
+  c.appendChild(el('div', 'mini', esJP ? 'Utilidad de hoy' : 'Vendido hoy'));
+  c.appendChild(el('div', 'num', pesos(esJP ? h.utilidad : h.ingresos)));
+  p.appendChild(c);
+
+  var k = el('div', 'kpis');
+  [['Piezas', String(h.piezas || 0)],
+   esJP ? ['Ingresos', pesos(h.ingresos)] : ['Tu comisión', pesos(h.comision)],
+   esJP ? ['Tuyas / Franco', (h.mias || 0) + ' / ' + (h.franco || 0)]
+        : ['Ingresos', pesos(h.ingresos)]]
+    .filter(Boolean).forEach(function (x) {
+      var d = el('div', 'kpi');
+      d.appendChild(el('b', null, x[1]));
+      d.appendChild(el('span', null, x[0]));
+      k.appendChild(d);
+    });
+  p.appendChild(k);
+
+  /* Franco: lo primero que necesita ver es lo que debe y lo que le llegó */
+  if (!esJP) {
+    var sfy = S.datos.saldoFranco || {};
+    var cd = el('div', 'card');
+    cd.appendChild(el('div', 'mini', 'Le debes a JP'));
+    cd.appendChild(el('div', 'num', pesos(sfy.debe)));
+    [['Piezas que has vendido', String(sfy.piezas || 0)],
+     ['Tu comisión acumulada', pesos(sfy.comision)],
+     ['Ya le entregaste', pesos(sfy.pagado)],
+     sfy.porCobrar ? ['Te deben clientes', pesos(sfy.porCobrar)] : null]
+      .filter(Boolean).forEach(function (x) {
+        var ren = el('div', 'ren');
+        ren.appendChild(el('div', 'mini', x[0]));
+        ren.appendChild(el('div', 'tab-num', x[1]));
+        cd.appendChild(ren);
+      });
+    p.appendChild(cd);
+
+    /* Te falta: el centro de su app. Sin esto solo puede ver y registrar,
+       no manejar su maleta. */
+    var ff = faltaFranco();
+    var pedidoAbierto = (S.datos.pedidos || []).filter(function (x) {
+      return x.quien === 'Franco';
+    })[0];
+    var gtf = el('div', 'group');
+    if (!scriptSabeMetas()) {
+      var renv = el('div', 'ren');
+      renv.appendChild(el('div', 'mini',
+        'Falta publicar la versión nueva del script para poner tu meta y pedir.'));
+      gtf.appendChild(renv);
+    } else if (!hayMetaPuesta()) {
+      var ren0 = el('div', 'ren');
+      var iz0 = el('div', 'col');
+      iz0.appendChild(el('div', null, 'Pon tu meta'));
+      iz0.appendChild(el('div', 'mini',
+        'Dinos cuántas piezas de cada modelo quieres traer y te avisamos qué te falta.'));
+      ren0.appendChild(iz0);
+      ren0.appendChild(el('div', 'mini', '›'));
+      ren0.onclick = function () { S.tab = 'meta'; pinta(); };
+      gtf.appendChild(ren0);
+    } else {
+      var faltaM = ff.reduce(function (a, b) { return a + b.faltaMaleta; }, 0);
+      var puedeSolo = ff.reduce(function (a, b) { return a + b.puedeSolo; }, 0);
+      var faltaC = ff.reduce(function (a, b) { return a + b.faltaCasa; }, 0);
+
+      if (faltaM) {
+        var ren1 = el('div', 'ren');
+        var iz1 = el('div', 'col');
+        iz1.appendChild(el('div', 'alerta', 'A tu maleta le faltan ' + faltaM + ' piezas'));
+        iz1.appendChild(el('div', 'mini', ff.filter(function (x) { return x.faltaMaleta; })
+          .slice(0, 3).map(function (x) { return x.mo + ' ×' + x.faltaMaleta; }).join(' · ')));
+        ren1.appendChild(iz1);
+        gtf.appendChild(ren1);
+      }
+      if (puedeSolo) {
+        var ren1b = el('div', 'ren');
+        var iz1b = el('div', 'col');
+        iz1b.appendChild(el('div', null, 'Rellenar mi maleta'));
+        iz1b.appendChild(el('div', 'mini', 'tienes ' + puedeSolo +
+          (puedeSolo === 1 ? ' pieza' : ' piezas') + ' en tu casa para cubrirlo'));
+        ren1b.appendChild(iz1b);
+        ren1b.appendChild(el('div', 'mini', '›'));
+        ren1b.onclick = rellenarMiMaleta;
+        gtf.appendChild(ren1b);
+      }
+      /* Pedir está siempre, le falte o no (JP, 18 nov). */
+      var ren1c = el('div', 'ren');
+      var iz1c = el('div', 'col');
+      iz1c.appendChild(el('div', faltaC ? 'alerta' : null, 'Pedirle a JP'));
+      iz1c.appendChild(el('div', 'mini', faltaC
+        ? 'a tu casa le faltan ' + faltaC + ' para tu meta'
+        : 'pide lo que quieras, aunque no te falte'));
+      ren1c.appendChild(iz1c);
+      ren1c.appendChild(el('div', 'mini', '›'));
+      ren1c.onclick = function () { S.tab = 'pedir'; pinta(); };
+      gtf.appendChild(ren1c);
+
+      if (!faltaM && !faltaC) {
+        var ren2 = el('div', 'ren');
+        ren2.appendChild(el('div', 'mini', 'Estás completo según tu meta.'));
+        gtf.appendChild(ren2);
+      }
+    }
+    if (scriptSabeMetas()) {
+      var renq = el('div', 'ren');
+      var izq = el('div', 'col');
+      izq.appendChild(el('div', 'mini', 'En tu maleta ' +
+        (S.datos.catalogo || []).reduce(function (a, r) { return a + (r.frm || 0); }, 0) +
+        ' · en tu casa ' +
+        (S.datos.catalogo || []).reduce(function (a, r) { return a + (r.frc || 0); }, 0)));
+      renq.appendChild(izq);
+      gtf.appendChild(renq);
+    }
+    if (pedidoAbierto) {
+      var ren3 = el('div', 'ren');
+      var iz3 = el('div', 'col');
+      iz3.appendChild(el('div', null, 'Ya pediste ' + pedidoAbierto.piezas + ' piezas'));
+      iz3.appendChild(el('div', 'mini', 'JP todavía no te las surte'));
+      ren3.appendChild(iz3);
+      gtf.appendChild(ren3);
+    }
+    p.appendChild(el('div', 'cap', 'Tu maleta'));
+    p.appendChild(gtf);
+
+    var pc = S.datos.porConfirmar || [];
+    if (pc.length) {
+      var tot = pc.reduce(function (a, b) { return a + b.piezas; }, 0);
+      p.appendChild(el('div', 'cap', 'JP te mandó ' + tot +
+        (tot === 1 ? ' pieza' : ' piezas')));
+      var gc = el('div', 'group');
+      pc.forEach(function (x) {
+        var ren = el('div', 'ren');
+        var iz = el('div', 'col');
+        iz.appendChild(el('div', null, x.sabor));
+        iz.appendChild(el('div', 'mini', x.modelo + ' · ' + x.fecha + ' ' + x.hora));
+        ren.appendChild(iz);
+        ren.appendChild(el('div', 'tab-num', '×' + x.piezas));
+        gc.appendChild(ren);
+      });
+      p.appendChild(gc);
+      var fb = el('div', 'fila');
+      fb.style.gap = '8px';
+      var bf = el('button', 'b', 'Falta algo');
+      bf.style.flex = '1';
+      bf.onclick = function () { faltaAlgo(pc); };
+      var br = el('button', 'b gde', 'Recibido');
+      br.style.flex = '1.3';
+      br.onclick = function () {
+        pc.forEach(function (x) {
+          encola({ t: 'Recibido', q: 'Franco', rf: x.folio, mo: x.modelo, sa: x.sabor,
+                   pz: 0, no: 'Confirmado por Franco' });
+        });
+        S.datos.porConfirmar = [];
+        avisa('Confirmado');
+        pinta();
+      };
+      fb.appendChild(bf); fb.appendChild(br);
+      p.appendChild(fb);
+    }
+  }
+
+  /* ventas del día por hora */
+  var horas = h.horas || [];
+  var ch = el('div', 'card');
+  ch.appendChild(el('div', 'fila', ''));
+  var fh = ch.firstChild;
+  fh.appendChild(el('div', 'mini', 'Ventas de hoy por hora'));
+  fh.appendChild(el('div', 'mini', (h.piezas || 0) + ' piezas'));
+  if (!horas.length) {
+    ch.appendChild(el('div', 'mini', 'Todavía no hay ventas hoy.'));
+  } else {
+    var desde = 8, hasta = 23;
+    horas.forEach(function (x) {
+      var n = parseInt(x.h, 10);
+      if (!isNaN(n)) { desde = Math.min(desde, n); hasta = Math.max(hasta, n); }
+    });
+    var mapa = {};
+    horas.forEach(function (x) { mapa[parseInt(x.h, 10)] = x; });
+    var max = 1;
+    horas.forEach(function (x) { max = Math.max(max, x.piezas); });
+    var barras = el('div', 'barras');
+    var ejes = el('div', 'ejes');
+    var ahora = new Date().getHours();
+    for (var i = desde; i <= hasta; i++) {
+      var x2 = mapa[i];
+      var b = el('div', i === ahora ? 'hoy' : '');
+      b.style.height = Math.round(100 * ((x2 ? x2.piezas : 0) / max)) + '%';
+      b.title = i + ':00 · ' + (x2 ? x2.piezas + ' piezas · ' + pesos(x2.ingresos) : 'nada');
+      barras.appendChild(b);
+      var e = el('span', null, (i % 3 === 0 || i === ahora) ? String(i) : '');
+      ejes.appendChild(e);
+    }
+    ch.appendChild(barras);
+    ch.appendChild(ejes);
+    var pico = horas.slice().sort(function (a, b2) { return b2.piezas - a.piezas; })[0];
+    ch.appendChild(el('div', 'mini',
+      'La hora más fuerte fue la de ' + parseInt(pico.h, 10) + ':00, con ' +
+      pico.piezas + (pico.piezas === 1 ? ' pieza.' : ' piezas.')));
+  }
+  p.appendChild(ch);
+
+  /* Últimos movimientos del día, agrupados por venta: una venta de tres
+     sabores es un renglón, no tres. Tocarlo abre deshacer y editar. */
+  var ventasHoy = agrupaVentas(h.ultimas);
+  if (ventasHoy.length) {
+    p.appendChild(el('div', 'cap', esJP ? 'Lo último de hoy' : 'Tus ventas de hoy'));
+    var gu = el('div', 'group');
+    ventasHoy.slice(0, esJP ? 5 : 8).forEach(function (g2) {
+      var ren = el('button', 'ren');
+      ren.style.cssText = 'width:100%; border:0; background:none; color:inherit; text-align:left';
+      var iz = el('div', 'col');
+      iz.appendChild(el('div', null, tituloVenta(g2)));
+      iz.appendChild(el('div', 'mini', g2.hora +
+        (esJP && g2.quien !== 'JP' ? ' · ' + g2.quien : '') +
+        (g2.piezas > 1 ? ' · ' + g2.piezas + ' piezas' : '') +
+        (g2.fp === 'Pendiente' ? ' · debe' : '')));
+      ren.appendChild(iz);
+      ren.appendChild(el('div', 'tab-num', pesos(g2.monto)));
+      ren.onclick = function () { hojaVenta(g2); };
+      gu.appendChild(ren);
+    });
+    p.appendChild(gu);
+  }
+
+  /* por cobrar: siempre a la vista, aunque esté en cero */
+  var pend = (S.datos.pendientes || []);
+  var total = pend.reduce(function (a, b) { return a + b.resta; }, 0);
+  var atras = pend.filter(function (x) { return x.dias >= (S.datos.diasAtraso || 14); }).length;
+  var cabp = el('div', 'fila');
+  cabp.appendChild(el('div', 'cap', 'Por cobrar'));
+  if (pend.length) {
+    var pil = el('div', 'pill ' + (atras ? 'bad' : 'n'),
+      atras ? atras + ' atrasados' : pend.length + ' ventas');
+    cabp.appendChild(pil);
+  }
+  p.appendChild(cabp);
+
+  var gp = el('div', 'group');
+  if (!pend.length) {
+    var vac = el('div', 'ren');
+    vac.appendChild(el('div', 'mini', 'Nadie te debe. Así se ve cuando está limpio.'));
+    gp.appendChild(vac);
+  } else {
+    var tot = el('div', 'ren');
+    tot.appendChild(el('div', null, 'Te deben en total'));
+    var tv = el('div', 'tab-num');
+    tv.style.fontWeight = '700';
+    tv.textContent = pesos(total);
+    tot.appendChild(tv);
+    gp.appendChild(tot);
+    pend.slice(0, 3).forEach(function (x) {
+      var ren = el('div', 'ren');
+      var iz = el('div', 'col');
+      iz.appendChild(el('div', null, x.cliente || 'Sin nombre'));
+      var sub = el('div', 'mini', x.modelo.split(' ').slice(0, 2).join(' ') + ' · hace ' +
+        x.dias + ' días' + (x.abonado ? ' · abonó ' + pesos(x.abonado) : ''));
+      if (x.dias >= (S.datos.diasAtraso || 14)) sub.className = 'mini malo';
+      iz.appendChild(sub);
+      ren.appendChild(iz);
+      ren.appendChild(el('div', 'tab-num', pesos(x.resta)));
+      ren.onclick = function () { cobro(x); };
+      gp.appendChild(ren);
+    });
+    var ver = el('div', 'ren');
+    ver.appendChild(el('div', null, pend.length > 3
+      ? 'Ver los ' + pend.length + ' y cobrar' : 'Cobrar'));
+    ver.appendChild(el('div', 'mini', '›'));
+    ver.onclick = function () { S.tab = 'pend'; pinta(); };
+    gp.appendChild(ver);
+  }
+  p.appendChild(gp);
+
+  /* pendientes de JP: maleta y Franco */
+  if (esJP) {
+    var falta = faltaMaleta();
+    var gj = el('div', 'group');
+    if (falta.length) {
+      var ren1 = el('div', 'ren');
+      var iz1 = el('div', 'col');
+      var t1 = el('div', null, 'A la maleta le faltan ' +
+        falta.reduce(function (a, b) { return a + b.n; }, 0) + ' piezas');
+      t1.className = 'alerta';
+      iz1.appendChild(t1);
+      iz1.appendChild(el('div', 'mini', falta.slice(0, 2).map(function (x) {
+        return x.sa + ' ×' + x.n;
+      }).join(' · ') + (falta.length > 2 ? ' y ' + (falta.length - 2) + ' más' : '')));
+      ren1.appendChild(iz1);
+      ren1.appendChild(el('div', 'mini', '›'));
+      ren1.onclick = rellenarMaleta;
+      gj.appendChild(ren1);
+    }
+    /* Lo que Franco pidió y lo que reportó. Antes esto solo se veía
+       abriendo el Sheet, así que en la práctica no se veía. */
+    (S.datos.pedidos || []).forEach(function (pe) {
+      var renp = el('div', 'ren');
+      var izp = el('div', 'col');
+      var tp = el('div', 'alerta', pe.quien + ' te pidió ' + pe.piezas + ' piezas');
+      izp.appendChild(tp);
+      izp.appendChild(el('div', 'mini', pe.lineas.slice(0, 2).map(function (l) {
+        return l.sabor + ' ×' + l.piezas;
+      }).join(' · ') + (pe.lineas.length > 2 ? ' y ' + (pe.lineas.length - 2) + ' más' : '') +
+        ' · ' + pe.hora));
+      renp.appendChild(izp);
+      renp.appendChild(el('div', 'mini', '›'));
+      renp.onclick = function () { surtido(pe); };
+      gj.appendChild(renp);
+    });
+
+    (S.datos.reportes || []).slice(0, 3).forEach(function (re) {
+      var renr = el('div', 'ren');
+      var izr = el('div', 'col');
+      izr.appendChild(el('div', null, re.quien + ' reportó algo'));
+      izr.appendChild(el('div', 'mini', (re.sabor ? re.sabor + ': ' : '') + re.nota));
+      renr.appendChild(izr);
+      renr.appendChild(el('div', 'mini', re.fecha.slice(5)));
+      gj.appendChild(renr);
+    });
+
+    var huerfanos = saboresQueFrancoTieneYJPNo();
+    if (huerfanos.length) {
+      var pzh = huerfanos.reduce(function (a, r) {
+        return a + (Number(r.frc) || 0) + (Number(r.frm) || 0);
+      }, 0);
+      var renh = el('div', 'ren');
+      var izh = el('div', 'col');
+      izh.appendChild(el('div', 'alerta', 'Pídele ' + pzh + ' piezas a Franco'));
+      izh.appendChild(el('div', 'mini', 'trae ' + huerfanos.length +
+        (huerfanos.length === 1 ? ' sabor que tú ya no tienes' : ' sabores que tú ya no tienes') +
+        ': ' + huerfanos.slice(0, 2).map(function (r) { return r.sa; }).join(' · ') +
+        (huerfanos.length > 2 ? ' y más' : '')));
+      renh.appendChild(izh);
+      renh.appendChild(el('div', 'mini', '›'));
+      renh.onclick = function () { devolucionDeFranco(true); };
+      gj.appendChild(renh);
+    }
+
+    var sf = S.datos.saldoFranco;
+    if (sf) {
+      var ren2 = el('div', 'ren');
+      var iz2 = el('div', 'col');
+      iz2.appendChild(el('div', null, 'Franco te debe'));
+      iz2.appendChild(el('div', 'mini', sf.piezas + ' piezas vendidas' +
+        (sf.porCobrar ? ' · ' + pesos(sf.porCobrar) + ' por cobrar a clientes' : '')));
+      ren2.appendChild(iz2);
+      var v2 = el('div', 'tab-num', pesos(sf.debe));
+      v2.style.fontWeight = '600';
+      ren2.appendChild(v2);
+      ren2.onclick = function () { S.tab = 'franco'; pinta(); };
+      gj.appendChild(ren2);
+    }
+    if (gj.childNodes.length) {
+      p.appendChild(el('div', 'cap', 'Te toca'));
+      p.appendChild(gj);
+    }
+  }
+
+  var nv = el('button', 'b gde', 'Nueva venta');
+  nv.onclick = function () { S.tab = 'venta'; pinta(); };
+  p.appendChild(nv);
+}
+
+/* --------------------------------------------- la maleta de Franco */
+
+/* La meta de Franco es por modelo y la pone él. Vive en la pestaña Metas
+   del Sheet, no en Ajustes: es el primer dato que escribe alguien que no
+   es JP y no debe pasar al lado de los precios ni de los PIN. */
+function metasHoy() { return (S.datos && S.datos.metas) || {}; }
+
+/* Dos metas por modelo, no una por cada sabor (JP, 18 nov, después de
+   probarla con Franco). 98 números no los mantiene nadie, y la pantalla
+   no le decía nada. Cada meta dispara algo distinto:
+     - maleta: lo que quiere traer encima → lo resuelve él, desde su casa
+     - casa:   su punto de reorden        → es lo que dispara el pedido a JP
+   Lo segundo es la pieza que faltaba: antes el único disparador para
+   pedirle a JP era haberse quedado sin nada en las dos. */
+function metaDe(mo, lugar) { return Number(metasHoy()[mo + '|' + lugar]) || 0; }
+
+function piezasDe(modelo, campo) {
+  return (S.datos.catalogo || []).reduce(function (a, r) {
+    return a + (r.mo === modelo ? (Number(r[campo]) || 0) : 0);
+  }, 0);
+}
+
+function modelosDelCatalogo() {
+  var out = [];
+  (S.datos.catalogo || []).forEach(function (r) {
+    if (out.indexOf(r.mo) < 0) out.push(r.mo);
+  });
+  return out;
+}
+
+/* Por modelo: lo que le falta a su maleta (lo cubre con su casa) y lo que
+   le falta a su casa (eso es lo que le pide a JP). Solo salen los modelos
+   que tienen alguna meta puesta. */
+function faltaFranco() {
+  return modelosDelCatalogo().map(function (mo) {
+    var enMaleta = piezasDe(mo, 'frm');
+    var enCasa = piezasDe(mo, 'frc');
+    var metaM = metaDe(mo, 'maleta');
+    var metaC = metaDe(mo, 'casa');
+    var faltaM = Math.max(0, metaM - enMaleta);
+    return {
+      mo: mo, enMaleta: enMaleta, enCasa: enCasa,
+      metaMaleta: metaM, metaCasa: metaC,
+      faltaMaleta: faltaM,
+      puedeSolo: Math.min(faltaM, enCasa),
+      faltaCasa: Math.max(0, metaC - enCasa),
+      casaJP: piezasDe(mo, 'ca')
+    };
+  }).filter(function (x) { return x.metaMaleta || x.metaCasa; });
+}
+
+function hayMetaPuesta() {
+  var m = metasHoy();
+  return Object.keys(m).some(function (k) { return Number(m[k]) > 0; });
+}
+
+/* Mismo seguro que con deshacer: si el script publicado todavía no sabe
+   de las metas por lugar, la app no las ofrece a medias. La 7 es la
+   versión que trae guardarMeta_ por modelo y lugar. */
+function scriptSabeMetas() { return Number((S.datos || {}).v || 0) >= 7; }
+
+/* La meta necesita señal: es un ajuste, no un movimiento, así que no pasa
+   por la cola. Si no hay red se dice y no se finge que se guardó. */
+function guardaMeta(modelo, lugar, n, listo) {
+  if (!navigator.onLine) { avisa('Sin señal: la meta se guarda con internet'); return; }
+  fetch(get(LS.url) + '?action=meta&pin=' + encodeURIComponent(get(LS.pin)) +
+        '&mo=' + encodeURIComponent(modelo) + '&lu=' + encodeURIComponent(lugar) +
+        '&n=' + encodeURIComponent(n))
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (j && j.ok) { avisa('Meta guardada'); if (listo) listo(j); }
+      else { avisa((j && j.error) ? 'No se guardó: ' + j.error : 'No se pudo guardar la meta'); }
+    })
+    .catch(function () { avisa('No se pudo guardar la meta'); });
+}
+
+function vMeta(p) {
+  var esFranco = S.rol === 'Franco';
+  p.appendChild(el('h1', null, esFranco ? 'Mi meta' : 'La meta de Franco'));
+  barraCola(p);
+  var w = el('div', 'col g12');
+  w.style.marginTop = '14px';
+  p.appendChild(w);
+
+  if (!scriptSabeMetas()) {
+    w.appendChild(el('div', 'card',
+      'Falta publicar la versión nueva del script. Hasta entonces la meta no se puede guardar.'));
+    return;
+  }
+
+  w.appendChild(el('div', 'sub', esFranco
+    ? 'Dos números por modelo: cuántas quieres traer en la maleta y cuántas quieres tener en tu casa. La de la maleta la cubres tú; la de tu casa es la que te avisa cuándo pedirle a JP.'
+    : 'Las pone Franco desde su app. Tú también puedes cambiarlas.'));
+
+  faltaTodos().forEach(function (x) {
+    var c = el('div', 'card');
+    var t = el('div', null, x.mo);
+    t.style.cssText = 'font-size:15px; font-weight:600';
+    c.appendChild(t);
+
+    [['maleta', 'En mi maleta', x.enMaleta, x.metaMaleta],
+     ['casa', 'En mi casa', x.enCasa, x.metaCasa]].forEach(function (par) {
+      var lugar = par[0], meta = par[3], hay = par[2];
+      var ren = el('div', 'ren');
+      var iz = el('div', 'col');
+      iz.appendChild(el('div', null, par[1]));
+      var sub = el('div', 'mini', 'traes ' + hay +
+        (meta ? (hay < meta ? ' · faltan ' + (meta - hay) : ' · completo') : ' · sin meta'));
+      if (meta && hay < meta) sub.className = 'mini alerta';
+      iz.appendChild(sub);
+      ren.appendChild(iz);
+      var fr = el('div', 'fila');
+      fr.style.gap = '8px';
+      var menos = el('button', 'b chico', '−'); menos.style.minWidth = '34px';
+      var num = el('div', null, String(meta));
+      num.style.cssText = 'min-width:22px; text-align:center; font-weight:600';
+      var mas = el('button', 'b chico', '+'); mas.style.minWidth = '34px';
+      function pon(n) {
+        if (n < 0) return;
+        guardaMeta(x.mo, lugar, n, function () {
+          metasHoy()[x.mo + '|' + lugar] = n;
+          pinta();
+        });
+      }
+      menos.onclick = function () { pon(Math.max(0, meta - 1)); };
+      mas.onclick = function () { pon(meta + 1); };
+      fr.appendChild(menos); fr.appendChild(num); fr.appendChild(mas);
+      ren.appendChild(fr);
+      c.appendChild(ren);
+    });
+    w.appendChild(c);
+  });
+
+  if (esFranco) {
+    var ffm = faltaFranco();
+    var puede = ffm.reduce(function (a, b) { return a + b.puedeSolo; }, 0);
+    if (puede) {
+      var b1 = el('button', 'b gde', 'Rellenar mi maleta · ' + puede + ' piezas');
+      b1.onclick = rellenarMiMaleta;
+      w.appendChild(b1);
+    }
+    var b2 = el('button', puede ? 'b' : 'b gde', 'Pedirle a JP');
+    b2.onclick = function () { S.tab = 'pedir'; pinta(); };
+    w.appendChild(b2);
+  }
+}
+
+/* Como faltaFranco() solo devuelve los modelos CON meta, la pantalla de
+   metas necesita todos: si no, un modelo sin meta no se podría poner. */
+function faltaTodos() {
+  return modelosDelCatalogo().map(function (mo) {
+    return {
+      mo: mo,
+      enMaleta: piezasDe(mo, 'frm'), enCasa: piezasDe(mo, 'frc'),
+      metaMaleta: metaDe(mo, 'maleta'), metaCasa: metaDe(mo, 'casa')
+    };
+  });
+}
+
+/* Franco pide lo que quiera, le falte o no (JP, 18 nov). Antes la
+   pantalla solo mostraba lo que su casa no alcanzaba a cubrir, y eso le
+   impedía pedir lo que sabía que iba a vender. Ve la cantidad exacta que
+   JP tiene en casa; lo que nunca ve son costos ni utilidades. */
+function vPedir(p) {
+  if (!S.pedido) S.pedido = { sel: {}, abierto: '' };
+  var P = S.pedido;
+  if (!P.sel) P.sel = {};
+  p.appendChild(el('h1', null, 'Pedirle a JP'));
+  barraCola(p);
+  var w = el('div', 'col g12');
+  w.style.marginTop = '14px';
+  p.appendChild(w);
+
+  var falta = {};
+  faltaFranco().forEach(function (x) { falta[x.mo] = x.faltaCasa; });
+
+  w.appendChild(el('div', 'sub',
+    'Pide lo que quieras, aunque no te falte. Al lado de cada sabor está lo que JP tiene en su casa.'));
+
+  modelosDelCatalogo().forEach(function (mo) {
+    var sab = (S.datos.catalogo || []).filter(function (r) { return r.mo === mo; });
+    var pedidoMo = sab.reduce(function (a, r) {
+      return a + (P.sel[r.mo + '|' + r.sa] || 0);
+    }, 0);
+    var hayJP = sab.reduce(function (a, r) { return a + (Number(r.ca) || 0); }, 0);
+
+    var c = el('div', 'card');
+    var f = el('div', 'fila');
+    var t = el('div', null, mo);
+    t.style.cssText = 'font-size:15px; font-weight:600';
+    f.appendChild(t);
+    var det = (falta[mo] ? 'te faltan ' + falta[mo] + ' · ' : '') +
+      'JP tiene ' + hayJP + (pedidoMo ? ' · pides ' + pedidoMo : '') +
+      (P.abierto === mo ? ' ⌄' : ' ›');
+    var sub = el('div', 'sub', det);
+    if (falta[mo]) sub.className = 'sub alerta';
+    f.appendChild(sub);
+    f.onclick = function () {
+      P.abierto = P.abierto === mo ? '' : mo;
+      pinta();
+    };
+    c.appendChild(f);
+
+    if (P.abierto === mo) {
+      sab.forEach(function (r) {
+        var k = r.mo + '|' + r.sa;
+        var hayJPsa = Number(r.ca) || 0;
+        var suyas = (Number(r.frc) || 0) + (Number(r.frm) || 0);
+        var ren = el('div', 'ren');
+        var iz = el('div', 'col');
+        iz.appendChild(el('div', null, r.sa));
+        var ms = el('div', 'mini', 'traes ' + suyas + ' · JP tiene ' + hayJPsa);
+        if (!hayJPsa) ms.className = 'mini alerta';
+        iz.appendChild(ms);
+        ren.appendChild(iz);
+        if (!hayJPsa) {
+          ren.appendChild(el('div', 'mini', 'no hay'));
+        } else {
+          var fr = el('div', 'fila');
+          fr.style.gap = '8px';
+          var menos = el('button', 'b chico', '−'); menos.style.minWidth = '34px';
+          var num = el('div', null, String(P.sel[k] || 0));
+          num.style.cssText = 'min-width:20px; text-align:center';
+          var mas = el('button', 'b chico', '+'); mas.style.minWidth = '34px';
+          menos.onclick = function () { P.sel[k] = Math.max(0, (P.sel[k] || 0) - 1); pinta(); };
+          /* El único tope es lo que JP tiene de verdad: pedir 10 de algo que
+             no existe no es libertad, es un pedido que no se puede surtir. */
+          mas.onclick = function () { P.sel[k] = Math.min(hayJPsa, (P.sel[k] || 0) + 1); pinta(); };
+          fr.appendChild(menos); fr.appendChild(num); fr.appendChild(mas);
+          ren.appendChild(fr);
+        }
+        c.appendChild(ren);
+      });
+    }
+    w.appendChild(c);
+  });
+
+  var total = Object.keys(P.sel).reduce(function (a, k) { return a + (P.sel[k] || 0); }, 0);
+  var b = el('button', 'b gde', total ? 'Mandar el pedido · ' + total + ' piezas' : 'Mandar el pedido');
+  b.disabled = !total;
+  b.onclick = function () {
+    var ancla = folio(), primero = true;
+    Object.keys(P.sel).forEach(function (k) {
+      if (!P.sel[k]) return;
+      var par = k.split('|');
+      encola({
+        f: primero ? ancla : undefined, rf: ancla,
+        t: 'Pedido', q: S.rol, mo: par[0], sa: par[1], pz: P.sel[k],
+        no: 'Pedido de ' + S.rol
+      });
+      primero = false;
+    });
+    S.pedido = null;
+    avisa('Pedido mandado a JP');
+    S.tab = 'inicio';
+    pinta();
+  };
+  w.appendChild(b);
+}
+
+/* Meta de la maleta: 2 por sabor en Waka 33k/36k/15k/100k y Lana; 1 en Fasta y Elfbar */
+function metaMaleta(modelo) {
+  if (/Waka 30k/.test(modelo)) return 0;
+  if (/Waka (33k|36k|15k|100k)|Lana/.test(modelo)) return 2;
+  return 1;
+}
+function faltaMaleta() {
+  var out = [];
+  (S.datos.catalogo || []).forEach(function (r) {
+    var m = metaMaleta(r.mo);
+    if (r.ma < m && r.ca > 0) {
+      out.push({ mo: r.mo, sa: r.sa, n: Math.min(m - r.ma, r.ca), ca: r.ca });
+    }
+  });
+  return out;
+}
+
+/* ------------------------------------------------------------------ venta */
+
+function vVenta(p) {
+  var v = S.venta;
+  var ed = v.editando;
+  p.appendChild(el('h1', null, ed ? 'Editar venta' : 'Venta'));
+  barraCola(p);
+  var w = el('div', 'col g16');
+  w.style.marginTop = '14px';
+  p.appendChild(w);
+
+  if (ed) {
+    var ce = el('div', 'card');
+    var ct2 = el('div', 'alerta', 'Estás corrigiendo la venta de las ' + ed.hora +
+      ' de ' + pesos(ed.monto) + '.');
+    ce.appendChild(ct2);
+    ce.appendChild(el('div', 'mini',
+      'Al guardar se cancela la anterior y se registra esta en su lugar.'));
+    var bsal = el('button', 'b chico', 'Dejarla como estaba');
+    bsal.onclick = function () {
+      S.venta = { de: 'Maleta', mo: '', sas: [], pr: '1', pz: 1, mn: 0,
+                  fp: 'Efectivo', ef: 0, d: '' };
+      S.tab = 'inicio';
+      pinta();
+    };
+    ce.appendChild(bsal);
+    w.appendChild(ce);
+  }
+
+  /* Día de la venta. Por defecto hoy; si es otro, se ve fuerte para que
+     nadie capture a un día equivocado sin darse cuenta. */
+  var dVenta = v.d || hoyISO();
+  var esHoy = dVenta === hoyISO();
+  var gd = el('div', esHoy ? 'fila' : 'card');
+  var etq = el('div', esHoy ? 'mini' : null, esHoy
+    ? 'Venta de hoy'
+    : 'Venta del ' + fechaBonita(dVenta));
+  if (!esHoy) etq.className = 'alerta';
+  gd.appendChild(etq);
+  var fdia = el('div', 'fila');
+  fdia.style.gap = '6px';
+  var inpD = el('input');
+  inpD.type = 'date'; inpD.value = dVenta; inpD.max = hoyISO();
+  inpD.className = 'b chico';
+  inpD.style.cssText = 'min-width:132px; padding:8px 10px';
+  inpD.onchange = function () { v.d = inpD.value || hoyISO(); pinta(); };
+  fdia.appendChild(inpD);
+  if (!esHoy) {
+    var bh = el('button', 'b chico', 'Volver a hoy');
+    bh.onclick = function () { v.d = ''; pinta(); };
+    fdia.appendChild(bh);
+  }
+  gd.appendChild(fdia);
+  w.appendChild(gd);
+
+  if (S.rol === 'JP') {
+    /* Uber no es un lugar donde viva el stock: la pieza sale de la maleta
+       y el chofer solo entrega. Por eso se registra como venta desde
+       Maleta a nombre de Uber, y lo que le pagas va aparte como gasto. */
+    w.appendChild(grupo('Desde', ['Maleta', 'Casa', 'Uber'], v.de, function (x) {
+      v.de = x; pinta();
+    }));
+  } else {
+    /* Franco también elige de dónde sale la pieza: trae maleta y casa,
+       igual que JP. Antes salía siempre del mismo montón y por eso su
+       maleta nunca se veía vacía. */
+    if (['Franco maleta', 'Franco casa'].indexOf(v.de) < 0) v.de = 'Franco maleta';
+    w.appendChild(grupo('Desde', ['Franco maleta', 'Franco casa'], v.de, function (x) {
+      v.de = x; pinta();
+    }, { 'Franco maleta': 'Mi maleta', 'Franco casa': 'Mi casa' }));
+  }
+
+  var salidaReal = v.de === 'Uber' ? 'Maleta' : v.de;
+
+  var modelos = [];
+  (S.datos.catalogo || []).forEach(function (r) {
+    if (modelos.indexOf(r.mo) < 0) modelos.push(r.mo);
+  });
+  var campo = lugarACampo(salidaReal) || 'ma';
+
+  var gm = el('div', 'col g8');
+  gm.appendChild(el('div', 'eti', 'Modelo'));
+  var rej = el('div', 'rejilla');
+  modelos.forEach(function (mo) {
+    var n = (S.datos.catalogo || []).filter(function (r) { return r.mo === mo; })
+      .reduce(function (a, r) { return a + r[campo]; }, 0);
+    var b = el('button', 'b' + (v.mo === mo ? ' on' : '') + (n ? '' : ' cero'));
+    b.appendChild(el('span', null, mo.replace(/ (Blade|Burst|Boost|Optimus|SoPro|Drop|Lush King|Plus)$/, '')));
+    b.appendChild(el('span', 'mini', String(n)));
+    b.onclick = function () { v.mo = mo; v.sas = []; pinta(); };
+    rej.appendChild(b);
+  });
+  gm.appendChild(rej);
+  w.appendChild(gm);
+
+  if (!v.mo) return;
+
+  var gp = el('div', 'col g8');
+  gp.appendChild(el('div', 'eti', 'Cómo se vende'));
+  var seg = el('div', 'seg');
+  [['1', '1 pieza'], ['2x', '2× promo'], ['esp', 'Especial']].forEach(function (x) {
+    var b = el('button', v.pr === x[0] ? 'on' : '', x[1]);
+    b.onclick = function () {
+      v.pr = x[0];
+      v.pz = x[0] === '2x' ? 2 : (x[0] === 'esp' ? (v.pz || 1) : 1);
+      if (x[0] !== '2x' && v.sas.length > 1) v.sas = [v.sas[0]];
+      calcula();
+      pinta();
+    };
+    seg.appendChild(b);
+  });
+  gp.appendChild(seg);
+  w.appendChild(gp);
+
+  var sabores = (S.datos.catalogo || []).filter(function (r) { return r.mo === v.mo; })
+    .sort(function (a, b) { return b[campo] - a[campo]; });
+
+  /* Cuántos sabores caben: 1 en unidad, 2 en el 2x, y en la especial
+     tantos como piezas lleve la venta. Se puede repetir el mismo. */
+  if (v.pr === 'esp') {
+    var gpz = el('div', 'col g8');
+    gpz.appendChild(el('div', 'eti', 'Cuántas piezas'));
+    var fpz = el('div', 'fila');
+    var menos = el('button', 'b', '−'); menos.style.minWidth = '58px';
+    var cuenta = el('div', 'num', String(v.pz));
+    cuenta.style.cssText = 'flex:1; text-align:center';
+    var mas = el('button', 'b on', '+'); mas.style.minWidth = '58px';
+    menos.onclick = function () {
+      v.pz = Math.max(1, v.pz - 1);
+      if (v.sas.length > v.pz) v.sas = v.sas.slice(0, v.pz);
+      pinta();
+    };
+    mas.onclick = function () { v.pz = v.pz + 1; pinta(); };
+    fpz.appendChild(menos); fpz.appendChild(cuenta); fpz.appendChild(mas);
+    gpz.appendChild(fpz);
+    w.appendChild(gpz);
+  }
+
+  var tope = v.pr === '2x' ? 2 : (v.pr === 'esp' ? v.pz : 1);
+  var gs = el('div', 'col g6');
+  gs.appendChild(el('div', 'eti', tope > 1
+    ? 'Sabores · toca uno por pieza, repite si van iguales'
+    : 'Sabor'));
+  var li = el('div', 'col g6 lista');
+  sabores.forEach(function (r) {
+    var veces = v.sas.filter(function (x) { return x === r.sa; }).length;
+    var b = el('button', 'b' + (veces ? ' on' : '') + (r[campo] ? '' : ' cero'));
+    b.appendChild(el('span', null, r.sa));
+    var der = el('span', 'mini', r[campo] ? String(r[campo]) : 'agotado');
+    if (veces) der.textContent = '×' + veces + ' · quedan ' + (r[campo] || 0);
+    b.appendChild(der);
+    b.onclick = function () {
+      if (tope === 1) { v.sas = [r.sa]; }
+      else if (v.sas.length < tope) { v.sas.push(r.sa); }
+      else { avisa('Ya elegiste ' + tope + '. Quítale a alguno abajo.'); return; }
+      calcula();
+      pinta();
+    };
+    li.appendChild(b);
+  });
+  gs.appendChild(li);
+  w.appendChild(gs);
+
+  if (!v.sas.length) return;
+
+  /* los elegidos, para poder quitar sin adivinar */
+  if (tope > 1) {
+    w.appendChild(el('div', 'cap', 'Van en esta venta · ' + v.sas.length + ' de ' + tope));
+    var ge2 = el('div', 'group');
+    agrupaSabores(v.sas).forEach(function (gr) {
+      var ren = el('div', 'ren');
+      var iz = el('div', 'col');
+      iz.appendChild(el('div', null, gr.sa));
+      iz.appendChild(el('div', 'mini', gr.n + (gr.n === 1 ? ' pieza' : ' piezas')));
+      ren.appendChild(iz);
+      var q = el('button', 'b chico', 'Quitar');
+      q.onclick = function () {
+        var i = v.sas.lastIndexOf(gr.sa);
+        if (i >= 0) v.sas.splice(i, 1);
+        calcula(); pinta();
+      };
+      ren.appendChild(q);
+      ge2.appendChild(ren);
+    });
+    w.appendChild(ge2);
+    if (v.sas.length < tope) {
+      var av2 = el('div', 'mini alerta');
+      av2.textContent = v.pr === '2x'
+        ? 'Si las dos piezas son del mismo sabor, así déjalo.'
+        : 'Faltan ' + (tope - v.sas.length) + ' por elegir, o bájale a las piezas.';
+      w.appendChild(av2);
+    }
+  }
+
+  if (v.pr === 'esp') {
+    var ge = el('div', 'card');
+    var gpr = el('div', 'col g8');
+    gpr.appendChild(el('div', 'eti', 'Precio total de la venta'));
+    var inp = el('input', 'campo');
+    inp.type = 'tel'; inp.inputMode = 'numeric'; inp.value = v.mn || '';
+    inp.oninput = function () { v.mn = Number(inp.value) || 0; };
+    gpr.appendChild(inp);
+    var lista = precioLista();
+    var dif = lista - (v.mn || 0);
+    gpr.appendChild(el('div', 'mini', 'Precio de lista por ' + v.pz +
+      (v.pz === 1 ? ' pieza' : ' piezas') + ': ' + pesos(lista) +
+      (v.mn && dif > 0 ? ' · le bajas ' + pesos(dif) : '') +
+      (v.mn && dif < 0 ? ' · le subes ' + pesos(-dif) : '')));
+    ge.appendChild(gpr);
+    w.appendChild(ge);
+  } else {
+    calcula();
+    var ct = el('div', 'card');
+    var ft = el('div', 'fila');
+    ft.appendChild(el('div', 'mini', 'Total'));
+    var tt = el('div', null, pesos(v.mn));
+    tt.style.cssText = 'font:700 26px var(--f-d)';
+    ft.appendChild(tt);
+    ct.appendChild(ft);
+    w.appendChild(ct);
+  }
+
+  /* Para Franco importa a quién le llegó la transferencia: si fue a JP,
+     Franco no debe ese dinero. */
+  var formas = S.rol === 'Franco'
+    ? ['Efectivo', 'Nu', 'Transferencia a Franco', 'Mixto', 'Pendiente']
+    : ['Efectivo', 'Nu', 'Mixto', 'Pendiente'];
+  var nombres = {
+    'Nu': S.rol === 'Franco' ? 'Transfer a JP' : 'Transfer',
+    'Transferencia a Franco': 'Transfer a mí',
+    'Pendiente': 'Debe'
+  };
+  /* 'Mixto a Franco' es un Mixto cuya transferencia le llegó a él. El botón
+     de 'Cómo paga' sigue siendo uno solo, así que para pintarlo encendido se
+     normaliza. */
+  var fpSel = v.fp === 'Mixto a Franco' ? 'Mixto' : v.fp;
+  w.appendChild(grupo('Cómo paga', formas, fpSel, function (x) {
+    v.fp = x; pinta();
+  }, nombres));
+
+  if (v.fp === 'Mixto' || v.fp === 'Mixto a Franco') {
+    var gmx = el('div', 'col g8');
+    gmx.appendChild(el('div', 'eti', 'Cuánto en efectivo'));
+    var ie = el('input', 'campo');
+    ie.type = 'tel'; ie.inputMode = 'numeric'; ie.value = v.ef || '';
+    ie.oninput = function () { v.ef = Number(ie.value) || 0; };
+    gmx.appendChild(ie);
+    /* Sin esta pregunta el Mixto de Franco era el único movimiento de la app
+       que no decía dónde cayó el dinero, y de eso depende si lo debe. */
+    if (S.rol === 'Franco') {
+      gmx.appendChild(grupo('El resto, ¿a quién le llegó?',
+        ['Mixto', 'Mixto a Franco'], v.fp,
+        function (x) { v.fp = x; pinta(); },
+        { 'Mixto': 'A JP', 'Mixto a Franco': 'A mí' }));
+    } else {
+      gmx.appendChild(el('div', 'mini', 'El resto se registra como transferencia.'));
+    }
+    w.appendChild(gmx);
+  }
+
+  var extra = el('div', 'col g8');
+  var mas2 = el('button', 'b chico', 'Más datos · cliente, envío, nota');
+  mas2.onclick = vMasDatos;
+  extra.appendChild(mas2);
+  w.appendChild(extra);
+
+  var reg = el('button', 'b gde', ed ? 'Guardar cambios'
+    : (esHoy ? 'Registrar venta'
+             : 'Registrar venta del ' + fechaBonita(dVenta)));
+  reg.style.cssText = 'width:100%; margin-top:4px';
+  reg.disabled = !v.mn && v.fp !== 'Pendiente';
+  reg.onclick = function () {
+    if (!v.mn) { avisa('Falta el precio'); return; }
+    if (v.sas.length < 1) { avisa('Falta el sabor'); return; }
+    var pr = v.pr === '2x' ? '2x' : (v.pr === 'esp' ? 'Especial' : 'Unidad');
+    var grupos = agrupaSabores(v.sas);
+    var piezasTotal = v.pr === '2x' ? 2 : (v.pr === 'esp' ? v.pz : 1);
+    /* Si eligió menos sabores que piezas, las que faltan van del primero. */
+    if (grupos.length === 1) grupos[0].n = piezasTotal;
+
+    var nota = v.no || '';
+    if (v.pr === 'esp') {
+      var lista = precioLista();
+      if (lista && lista !== v.mn) {
+        nota = (nota ? nota + ' · ' : '') + 'precio especial, lista ' + pesos(lista);
+      }
+    }
+    if (grupos.length > 1) {
+      nota = (nota ? nota + ' · ' : '') + pr + ' de ' + grupos.length + ' sabores';
+    }
+    if (!esHoy) {
+      nota = (nota ? nota + ' · ' : '') + 'capturada el ' + fechaBonita(hoyISO());
+    }
+    /* Editar: primero se cancela la vieja y después se registra la nueva.
+       En ese orden, porque la cola sube en orden y el stock de la pantalla
+       tiene que regresar antes de que la venta nueva lo vuelva a bajar. */
+    if (ed) {
+      nota = (nota ? nota + ' · ' : '') + 'corrige la venta de las ' + ed.hora;
+      revierteLocal(ed);
+      encolaCancelacion(ed, 'Corregida: se volvió a registrar · ' + pesos(ed.monto));
+    }
+
+    var efTotal = (v.fp === 'Mixto' || v.fp === 'Mixto a Franco') ? v.ef
+      : (v.fp === 'Efectivo' ? v.mn : 0);
+    var suma = grupos.reduce(function (a, g) { return a + g.n; }, 0) || 1;
+    var montoRepartido = 0, efRepartido = 0;
+
+    /* Ancla de la venta: el folio de la primera fila, que todas llevan en
+       Ref folio. Es lo que permite deshacerla completa después. */
+    var ancla = folio();
+
+    grupos.forEach(function (g, i) {
+      var ultimo = i === grupos.length - 1;
+      /* El último se lleva el redondeo, así los pesos cuadran exactos. */
+      var mn = ultimo ? (v.mn - montoRepartido) : Math.round(v.mn * g.n / suma);
+      var ef = ultimo ? (efTotal - efRepartido) : Math.round(efTotal * g.n / suma);
+      montoRepartido += mn; efRepartido += ef;
+      encola({
+        f: i === 0 ? ancla : undefined, rf: ancla,
+        t: 'Venta', q: v.de === 'Uber' ? 'Uber' : S.rol, mo: v.mo, sa: g.sa, pr: pr,
+        d: dVenta, pz: g.n, mn: mn, ef: ef, fp: v.fp,
+        cl: v.cl || '', en: i === 0 ? (v.en || 0) : 0, no: nota,
+        de: salidaReal, ha: 'Cliente'
+      });
+    });
+
+    if (v.de === 'Uber' && Number(v.uber) > 0) {
+      /* Un gasto que no dice de dónde salió baja el efectivo sin que nada lo
+         sepa: la caja del domingo no cuadra y no hay forma de ver por qué. */
+      var ufp = v.ufp || 'Efectivo';
+      encola({ t: 'Gasto', q: 'Uber', mn: Number(v.uber),
+               fp: ufp, ef: ufp === 'Efectivo' ? Number(v.uber) : 0,
+               no: 'Entrega en Uber' + (v.cl ? ' a ' + v.cl : '') });
+    }
+
+    avisa(ed ? 'Venta corregida'
+             : (grupos.length > 1 ? 'Venta registrada, ' + grupos.length + ' sabores'
+                                  : 'Venta registrada'));
+    S.venta = { de: v.de, mo: '', sas: [], pr: '1', pz: 1, mn: 0,
+                fp: 'Efectivo', ef: 0, d: esHoy ? '' : dVenta };
+    S.tab = 'inicio';
+    pinta();
+  };
+  w.appendChild(reg);
+}
+
+/* Agrupa ['A','B','A'] en [{sa:'A',n:2},{sa:'B',n:1}] */
+function agrupaSabores(lista) {
+  var orden = [], m = {};
+  lista.forEach(function (x) {
+    if (!m[x]) { m[x] = { sa: x, n: 0 }; orden.push(m[x]); }
+    m[x].n++;
+  });
+  return orden;
+}
+
+/* ------------------------------------------------- deshacer y editar */
+
+/* Las filas de una misma venta comparten ancla: el folio de la primera,
+   que todas traen en Ref folio. Una fila sin ancla es una venta de una
+   sola fila (así se registraban antes de esta regla). */
+function agrupaVentas(lista) {
+  var orden = [], m = {};
+  (lista || []).forEach(function (u) {
+    var a = u.rf || u.folio;
+    if (!m[a]) {
+      m[a] = { ancla: a, filas: [], piezas: 0, monto: 0 };
+      orden.push(m[a]);
+    }
+    m[a].filas.push(u);
+    m[a].piezas += Number(u.piezas) || 0;
+    m[a].monto += Number(u.monto) || 0;
+  });
+  orden.forEach(function (g) {
+    var p0 = g.filas[0];
+    g.hora = p0.hora; g.quien = p0.quien; g.modelo = p0.modelo;
+    g.pr = p0.pr; g.fp = p0.fp; g.cl = p0.cl || '';
+    g.de = p0.de || ''; g.fecha = p0.fecha || '';
+  });
+  return orden;
+}
+
+function tituloVenta(g) {
+  var corto = String(g.modelo || '').split(' ').slice(0, 2).join(' ');
+  var pre = g.pr === '2x' ? '2× ' : '';
+  if (g.filas.length === 1) return pre + corto + ' · ' + g.filas[0].sabor;
+  return pre + corto + ' · ' + g.filas.length + ' sabores';
+}
+
+/* El stock vuelve a la pantalla al instante. La cancelación viaja como un
+   solo movimiento sin piezas, así que aquí se revierte fila por fila. */
+function revierteLocal(g) {
+  g.filas.forEach(function (x) {
+    if (x.de) {
+      aplicaLocal({ t: 'Cancelación', mo: x.modelo, sa: x.sabor,
+                    pz: Number(x.piezas) || 0, ha: x.de });
+    }
+  });
+  var h = S.datos.hoy || {};
+  h.piezas = Math.max(0, (h.piezas || 0) - g.piezas);
+  h.ingresos = (h.ingresos || 0) - g.monto;
+  if (g.quien === 'Franco') h.franco = Math.max(0, (h.franco || 0) - g.piezas);
+  else h.mias = Math.max(0, (h.mias || 0) - g.piezas);
+  if (S.rol === 'JP' && h.utilidad !== undefined) {
+    /* Aproximación sin comisión: el número exacto llega con la siguiente
+       bajada, en cuanto la cola termine de subir. */
+    var costos = S.datos.costos || {};
+    var ut = 0;
+    g.filas.forEach(function (x) {
+      ut += (Number(x.monto) || 0) -
+            (Number(costos[x.modelo]) || 0) * (Number(x.piezas) || 0);
+    });
+    h.utilidad = (h.utilidad || 0) - ut;
+  }
+  h.ultimas = (h.ultimas || []).filter(function (u) {
+    return (u.rf || u.folio) !== g.ancla;
+  });
+  var ids = {};
+  g.filas.forEach(function (x) { ids[x.folio] = true; });
+  S.datos.pendientes = (S.datos.pendientes || []).filter(function (x) {
+    return !ids[x.folio];
+  });
+}
+
+function encolaCancelacion(g, nota) {
+  encola({ t: 'Cancelación', rf: g.ancla, q: S.rol, no: nota });
+}
+
+/* Se puede deshacer si el script publicado ya lo sabe hacer (v >= 2) y la
+   venta es de hoy. Un botón que no está es mejor que uno que dice que
+   canceló sin haber cancelado nada. */
+function sePuedeDeshacer(g) {
+  if (Number((S.datos || {}).v || 0) < 2) return 'script';
+  if (g.fecha && g.fecha !== hoyISO()) return 'dia';
+  return '';
+}
+
+function hojaVenta(g) {
+  var w = el('div', 'col g12');
+  w.appendChild(el('h1', null, 'Venta de las ' + g.hora));
+  var c = el('div', 'card');
+  g.filas.forEach(function (x) {
+    var ren = el('div', 'ren');
+    var iz = el('div', 'col');
+    iz.appendChild(el('div', null,
+      String(x.modelo).split(' ').slice(0, 2).join(' ') + ' · ' + x.sabor));
+    iz.appendChild(el('div', 'mini',
+      x.piezas + (x.piezas === 1 ? ' pieza' : ' piezas')));
+    ren.appendChild(iz);
+    ren.appendChild(el('div', 'tab-num', pesos(x.monto)));
+    c.appendChild(ren);
+  });
+  var tot = el('div', 'ren');
+  tot.appendChild(el('div', null, 'Total'));
+  var tv = el('div', 'tab-num');
+  tv.style.fontWeight = '700';
+  tv.textContent = pesos(g.monto);
+  tot.appendChild(tv);
+  c.appendChild(tot);
+  c.appendChild(el('div', 'mini',
+    (g.pr === '2x' ? '2× promo · ' : (g.pr === 'Especial' ? 'Especial · ' : '')) +
+    (g.fp === 'Pendiente' ? 'queda a deber' : g.fp) +
+    (g.cl ? ' · ' + g.cl : '') + (g.de ? ' · salió de ' + g.de : '')));
+  w.appendChild(c);
+
+  var no = sePuedeDeshacer(g);
+  if (no) {
+    w.appendChild(el('div', 'mini', no === 'dia'
+      ? 'Solo se deshacen las ventas de hoy. Esta es de otro día: se arregla en el Sheet.'
+      : 'Falta publicar la versión nueva del script para poder deshacer desde aquí.'));
+    var cr = el('button', 'b gde', 'Cerrar');
+    cr.onclick = function () { hoja(null); };
+    w.appendChild(cr);
+    hoja(w);
+    return;
+  }
+
+  var bd = el('button', 'b gde', 'Deshacer esta venta');
+  bd.style.background = 'var(--bad)';
+  bd.style.color = '#fff';
+  bd.onclick = function () { confirmaDeshacer(g); };
+  w.appendChild(bd);
+  var be = el('button', 'b', 'Editarla');
+  be.onclick = function () { hoja(null); abreEdicion(g); };
+  w.appendChild(be);
+  hoja(w);
+}
+
+function confirmaDeshacer(g) {
+  var w = el('div', 'col g12');
+  w.appendChild(el('h1', null, '¿Deshacer?'));
+  w.appendChild(el('div', 'sub', 'Se cancela la venta de ' + pesos(g.monto) +
+    ' y ' + (g.piezas === 1 ? 'una pieza regresa' : g.piezas + ' piezas regresan') +
+    ' al inventario. No se borra nada: queda el rastro de que se deshizo.'));
+  var si = el('button', 'b gde', 'Sí, deshacer');
+  si.style.background = 'var(--bad)';
+  si.style.color = '#fff';
+  si.onclick = function () {
+    hoja(null);
+    revierteLocal(g);
+    encolaCancelacion(g, 'Deshecha la venta de las ' + g.hora + ' · ' + pesos(g.monto));
+    avisa('Venta deshecha');
+    S.tab = 'inicio';
+    pinta();
+  };
+  w.appendChild(si);
+  var mn = el('button', 'b', 'Mejor no');
+  mn.onclick = function () { hoja(null); };
+  w.appendChild(mn);
+  hoja(w);
+}
+
+/* Editar es deshacer y volver a registrar, no corregir en su lugar: un
+   solo camino de código y el historial cuenta lo que de verdad pasó. */
+function abreEdicion(g) {
+  var sas = [];
+  g.filas.forEach(function (x) {
+    for (var i = 0; i < (Number(x.piezas) || 0); i++) sas.push(x.sabor);
+  });
+  S.venta = {
+    editando: g,
+    de: g.quien === 'Uber' ? 'Uber' : (g.de || 'Maleta'),
+    mo: g.modelo,
+    sas: sas,
+    pr: g.pr === '2x' ? '2x' : (g.pr === 'Especial' ? 'esp' : '1'),
+    pz: g.piezas,
+    mn: g.monto,
+    fp: g.fp || 'Efectivo',
+    ef: g.filas.reduce(function (a, x) { return a + (Number(x.ef) || 0); }, 0),
+    en: g.filas.reduce(function (a, x) { return a + (Number(x.en) || 0); }, 0),
+    cl: g.cl || '',
+    no: '',
+    d: ''
+  };
+  S.tab = 'venta';
+  pinta();
+}
+
+function precioLista() {
+  var v = S.venta;
+  var r = (S.datos.catalogo || []).filter(function (x) {
+    return x.mo === v.mo && x.sa === (v.sas[0] || '');
+  })[0];
+  if (!r) return 0;
+  if (v.pr === '2x') return r.p2;
+  if (v.pr === 'esp') return Math.floor(v.pz / 2) * r.p2 + (v.pz % 2) * r.p1;
+  return r.p1;
+}
+function calcula() {
+  var v = S.venta;
+  if (v.pr === 'esp') return;
+  v.mn = precioLista();
+  v.pz = v.pr === '2x' ? 2 : 1;
+}
+
+function grupo(titulo, ops, sel, cb, nombres) {
+  var g = el('div', 'col g8');
+  g.appendChild(el('div', 'eti', titulo));
+  var f = el('div', 'fila g6');
+  f.style.cssText = 'gap:6px; flex-wrap:wrap';
+  ops.forEach(function (o) {
+    var b = el('button', 'b chico' + (sel === o ? ' on' : ''),
+      (nombres && nombres[o]) ? nombres[o] : o);
+    b.style.cssText = 'flex:1 1 auto; min-width:72px';
+    b.onclick = function () { cb(o); };
+    f.appendChild(b);
+  });
+  g.appendChild(f);
+  return g;
+}
+
+function vMasDatos() {
+  var v = S.venta;
+  function dibuja() {
+    var c = el('div', 'col g16');
+    c.appendChild(el('h1', null, 'Más datos'));
+    var campos = [['cl', 'Cliente', 'text'], ['en', 'Envío cobrado', 'tel'], ['no', 'Nota', 'text']];
+    if (v.de === 'Uber') campos.splice(2, 0, ['uber', 'Lo que le pagas al chofer', 'tel']);
+    campos.forEach(function (x) {
+        var g = el('div', 'col g8');
+        g.appendChild(el('div', 'eti', x[1]));
+        var i = el('input', 'campo');
+        i.type = x[2]; i.value = v[x[0]] || '';
+        i.oninput = function () { v[x[0]] = x[2] === 'tel' ? (Number(i.value) || 0) : i.value; };
+        g.appendChild(i);
+        c.appendChild(g);
+      });
+    /* De dónde sale el pago al chofer. Casi siempre efectivo, pero si sale de
+       Nu y se registra como efectivo, la caja queda mintiendo. */
+    if (v.de === 'Uber' && Number(v.uber) > 0) {
+      c.appendChild(grupo('El pago al chofer sale de', ['Efectivo', 'Nu'],
+        v.ufp || 'Efectivo', function (x) { v.ufp = x; dibuja(); },
+        { 'Nu': 'Transferencia' }));
+    }
+    var b = el('button', 'b gde', 'Listo');
+    b.onclick = function () { hoja(null); pinta(); };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
+}
+
+/* Si lo que le llego no cuadra, Franco lo dice con sus palabras y JP lo ve.
+   No se toca el inventario: lo corrige JP con un ajuste por conteo. */
+function faltaAlgo(pc) {
+  var d = { txt: '' };
+  var c = el('div', 'col g16');
+  c.appendChild(el('h1', null, 'Falta algo'));
+  c.appendChild(el('div', 'mini',
+    'Escribe qué no llegó o qué llegó de más. JP lo ve y lo corrige; el stock no se mueve con esto.'));
+  var i = el('input', 'campo');
+  i.type = 'text';
+  i.placeholder = 'Ej. faltó 1 Mojito Mint';
+  i.oninput = function () { d.txt = i.value; };
+  c.appendChild(i);
+  var b = el('button', 'b gde', 'Avisarle a JP');
+  b.onclick = function () {
+    if (!d.txt.trim()) { avisa('Escribe qué pasó'); return; }
+    pc.forEach(function (x) {
+      encola({ t: 'Recibido', q: 'Franco', rf: x.folio, mo: x.modelo, sa: x.sabor,
+               pz: 0, no: 'Franco reporta: ' + d.txt.trim() });
+    });
+    S.datos.porConfirmar = [];
+    hoja(null); avisa('Avisado'); pinta();
+  };
+  c.appendChild(b);
+  hoja(c);
+}
+
+/* ------------------------------------------------------------------ pendientes */
+
+function vPendientes(p) {
+  var pend = S.datos.pendientes || [];
+  p.appendChild(el('h1', null, 'Pendientes'));
+  p.appendChild(el('div', 'sub', pesos(pend.reduce(function (a, b) { return a + b.resta; }, 0)) +
+    ' por cobrar · ' + pend.length + ' ventas'));
+  barraCola(p);
+
+  var w = el('div', 'col g8');
+  w.style.marginTop = '14px';
+  pend.forEach(function (x) {
+    var atras = x.dias >= (S.datos.diasAtraso || 14);
+    var c = el('div', 'card' + (atras ? ' mal' : ''));
+    var f = el('div', 'fila');
+    var n = el('div', null, x.cliente || 'Sin nombre');
+    n.style.cssText = 'font-size:15px; font-weight:600';
+    f.appendChild(n);
+    var m = el('div', null, pesos(x.resta));
+    m.style.cssText = 'font-size:16px; font-weight:700';
+    f.appendChild(m);
+    c.appendChild(f);
+    var f2 = el('div', 'fila');
+    f2.style.marginTop = '6px';
+    f2.appendChild(el('div', 'mini', x.modelo + ' · ' + x.sabor + ' · ' + x.quien));
+    var d = el('div', 'mini', 'hace ' + x.dias + ' días');
+    if (atras) d.style.color = 'var(--bad)';
+    f2.appendChild(d);
+    c.appendChild(f2);
+    if (x.abonado) {
+      var bar = el('div');
+      bar.style.cssText = 'height:5px; border-radius:3px; background:var(--line); margin-top:9px; overflow:hidden';
+      var in2 = el('div', 'barra');
+      in2.style.cssText = 'height:5px; width:' + Math.round(100 * x.abonado / x.total) + '%';
+      bar.appendChild(in2);
+      c.appendChild(bar);
+      c.appendChild(el('div', 'mini', 'Abonó ' + pesos(x.abonado) + ' · restan ' + pesos(x.resta)));
+    }
+    c.onclick = function () { cobro(x); };
+    w.appendChild(c);
+  });
+  if (!pend.length) w.appendChild(el('div', 'sub', 'Nadie te debe.'));
+  p.appendChild(w);
+}
+
+function cobro(x) {
+  var modo = { parcial: false, ef: x.resta, nu: 0 };
+  function dibuja() {
+    var c = el('div', 'col g16');
+    var f = el('div', 'fila');
+    var t = el('div', null, 'Cobrar a ' + (x.cliente || 'este cliente'));
+    t.style.cssText = 'font-size:17px; font-weight:700';
+    f.appendChild(t);
+    f.appendChild(el('div', 'sub', 'debe ' + pesos(x.resta)));
+    c.appendChild(f);
+
+    var seg = el('div', 'fila');
+    seg.style.gap = '7px';
+    [['Liquidar todo', false], ['Abonar parte', true]].forEach(function (o) {
+      var b = el('button', 'b' + (modo.parcial === o[1] ? ' on' : ''), o[0]);
+      b.style.flex = '1';
+      b.onclick = function () {
+        modo.parcial = o[1];
+        if (!o[1]) { modo.ef = x.resta; modo.nu = 0; }
+        else { modo.ef = 0; modo.nu = 0; }
+        hoja(null); dibuja();
+      };
+      seg.appendChild(b);
+    });
+    c.appendChild(seg);
+
+    c.appendChild(el('div', 'eti', 'Cuánto y cómo'));
+    var fil = el('div', 'fila');
+    fil.style.gap = '8px';
+    [['Efectivo', 'ef'], ['Nu', 'nu']].forEach(function (o) {
+      var g = el('div', 'col g6');
+      g.style.flex = '1';
+      g.appendChild(el('div', 'mini', o[0]));
+      var i = el('input', 'campo');
+      i.type = 'tel'; i.inputMode = 'numeric'; i.value = modo[o[1]] || '';
+      i.oninput = function () { modo[o[1]] = Number(i.value) || 0; resto(); };
+      g.appendChild(i);
+      fil.appendChild(g);
+    });
+    c.appendChild(fil);
+    var av = el('div', 'mini', '');
+    c.appendChild(av);
+    function resto() {
+      var falta = x.resta - (modo.ef + modo.nu);
+      av.textContent = falta > 0
+        ? 'Después de este cobro le quedan ' + pesos(falta) + '.'
+        : (falta < 0 ? 'Eso es más de lo que debe.' : 'Con esto queda liquidado.');
+    }
+    resto();
+
+    var b = el('button', 'b gde', 'Registrar cobro');
+    b.onclick = function () {
+      var total = modo.ef + modo.nu;
+      if (total <= 0) { avisa('Falta el monto'); return; }
+      if (total > x.resta) { avisa('Es más de lo que debe'); return; }
+      encola({
+        t: 'Cobro de pendiente', q: S.rol, rf: x.folio, cl: x.cliente,
+        mn: total, ef: modo.ef,
+        fp: modo.ef && modo.nu ? 'Mixto' : (modo.ef ? 'Efectivo' : 'Nu'),
+        no: total < x.resta ? 'Abono parcial' : 'Liquidado'
+      });
+      x.abonado += total; x.resta -= total;
+      if (x.resta <= 0) {
+        S.datos.pendientes = S.datos.pendientes.filter(function (y) { return y.folio !== x.folio; });
+      }
+      hoja(null);
+      avisa(total < x.resta + total ? 'Cobro registrado' : 'Liquidado');
+      pinta();
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
+}
+
+/* ------------------------------------------------------------------ inventario */
+
+function vInventario(p) {
+  var esFr = S.rol === 'Franco';
+  var permitidos = esFr ? ['frm', 'frc'] : ['ca', 'ma', 'frc', 'frm'];
+  if (permitidos.indexOf(vInventario.lugar) < 0) vInventario.lugar = permitidos[0];
+  var lugar = vInventario.lugar;
+  p.appendChild(el('h1', null, esFr ? 'Mi stock' : 'Inventario'));
+  barraCola(p);
+
+  var seg = el('div', 'seg');
+  seg.style.margin = '12px 0';
+  (esFr ? [['frm', 'Mi maleta'], ['frc', 'Mi casa']]
+        : [['ca', 'Casa'], ['ma', 'Maleta'], ['frc', 'Franco casa'], ['frm', 'Franco maleta']])
+    .forEach(function (o) {
+      var b = el('button', lugar === o[0] ? 'on' : '', o[1]);
+      b.onclick = function () { vInventario.lugar = o[0]; pinta(); };
+      seg.appendChild(b);
+    });
+  p.appendChild(seg);
+
+  /* Franco rellena su maleta desde su casa, igual que JP la suya. */
+  if (esFr && lugar === 'frm') {
+    var ffi = faltaFranco().filter(function (x) { return x.faltaMaleta > 0; });
+    var puede = ffi.reduce(function (a, b) { return a + b.puedeSolo; }, 0);
+    if (ffi.length) {
+      var cmf = el('div', 'card ac');
+      cmf.style.marginBottom = '12px';
+      var tf = el('div', null, 'Te faltan ' +
+        ffi.reduce(function (a, b) { return a + b.faltaMaleta; }, 0) + ' piezas');
+      tf.style.cssText = 'font-size:15px; font-weight:600; color:var(--warn)';
+      cmf.appendChild(tf);
+      cmf.appendChild(el('div', 'mini', ffi.slice(0, 8).map(function (x) {
+        return x.mo + ' ×' + x.faltaMaleta;
+      }).join(' · ') + (ffi.length > 8 ? ' y ' + (ffi.length - 8) + ' más' : '')));
+      var bf = el('button', 'b gde', puede ? 'Rellenar mi maleta' : 'Pedirle a JP');
+      bf.style.cssText = 'width:100%; margin-top:10px; min-height:44px; font-size:14px';
+      bf.onclick = puede ? rellenarMiMaleta : function () { S.tab = 'pedir'; pinta(); };
+      cmf.appendChild(bf);
+      p.appendChild(cmf);
+    }
+  }
+
+  if (S.rol === 'JP') {
+    if (lugar === 'ma') {
+      var falta = faltaMaleta();
+      if (falta.length) {
+        var cm = el('div', 'card ac');
+        cm.style.marginBottom = '12px';
+        var t = el('div', null, 'Faltan ' + falta.reduce(function (a, b) { return a + b.n; }, 0) + ' piezas');
+        t.style.cssText = 'font-size:15px; font-weight:600; color:var(--warn)';
+        cm.appendChild(t);
+        cm.appendChild(el('div', 'mini', falta.map(function (x) {
+          return x.mo.split(' ')[0] + ' ' + x.mo.split(' ')[1] + ' ' + x.sa + ' ×' + x.n;
+        }).join(' · ')));
+        var b = el('button', 'b gde', 'Rellenar la maleta');
+        b.style.cssText = 'width:100%; margin-top:10px; min-height:44px; font-size:14px';
+        b.onclick = rellenarMaleta;
+        cm.appendChild(b);
+        p.appendChild(cm);
+      }
+    }
+  }
+
+  var modelos = [];
+  (S.datos.catalogo || []).forEach(function (r) {
+    if (modelos.indexOf(r.mo) < 0) modelos.push(r.mo);
+  });
+  var total = (S.datos.catalogo || []).reduce(function (a, r) { return a + r[lugar]; }, 0);
+  p.appendChild(el('div', 'eti', total + ' piezas'));
+
+  var w = el('div', 'col g8');
+  w.style.marginTop = '8px';
+  modelos.forEach(function (mo) {
+    var sab = (S.datos.catalogo || []).filter(function (r) { return r.mo === mo; });
+    var n = sab.reduce(function (a, r) { return a + r[lugar]; }, 0);
+    var c = el('div', 'card');
+    var f = el('div', 'fila');
+    var t = el('div', null, mo);
+    t.style.cssText = 'font-size:15px; font-weight:600';
+    f.appendChild(t);
+    f.appendChild(el('div', 'sub', n + (vInventario.abierto === mo ? ' ⌄' : ' ›')));
+    c.appendChild(f);
+    if (vInventario.abierto === mo) {
+      sab.sort(function (a, b) { return b[lugar] - a[lugar]; }).forEach(function (r) {
+        var ren = el('div', 'ren');
+        var s = el('div', null, r.sa);
+        var v = el('div', null, String(r[lugar]));
+        if (!r[lugar]) { s.style.color = 'var(--bad)'; v.style.color = 'var(--bad)'; v.textContent = '0'; }
+        ren.appendChild(s); ren.appendChild(v);
+        c.appendChild(ren);
+      });
+    }
+    c.onclick = function () {
+      vInventario.abierto = vInventario.abierto === mo ? '' : mo;
+      pinta();
+    };
+    w.appendChild(c);
+  });
+  p.appendChild(w);
+
+  if (S.rol === 'JP') {
+    var fb = el('div', 'fila g8');
+    fb.style.cssText = 'gap:8px; margin-top:12px';
+    fb.style.flexWrap = 'wrap';
+    [['Entrada de proveedor', 'Compra a proveedor'], ['Ajuste por conteo', 'Ajuste']]
+      .forEach(function (o) {
+        var b = el('button', 'b', o[0]);
+        b.style.flex = '1';
+        b.onclick = function () { vMovimiento(o[1]); };
+        fb.appendChild(b);
+      });
+    p.appendChild(fb);
+    var bp = el('button', 'b', 'Pagar a proveedor');
+    bp.style.cssText = 'width:100%; margin-top:8px';
+    bp.onclick = pagoProveedor;
+    p.appendChild(bp);
+  }
+
+  /* Garantía: pasa seguido pero no a diario, así que es un botón y no una
+     pestaña. Para los dos, en la pantalla donde ya se mueve inventario. */
+  if (scriptSabeGarantia()) {
+    var bg = el('button', 'b', 'Cambio por garantía');
+    bg.style.cssText = 'width:100%; margin-top:8px';
+    bg.onclick = garantia;
+    p.appendChild(bg);
+  }
+}
+
+function vMovimiento(tipo) {
+  var d = { mo: '', sa: '', pz: 1, mn: 0, ha: tipo === 'Ajuste' ? 'Casa' : 'Casa' };
+  var modelos = [];
+  (S.datos.catalogo || []).forEach(function (r) {
+    if (modelos.indexOf(r.mo) < 0) modelos.push(r.mo);
+  });
+  function dibuja() {
+    var c = el('div', 'col g16');
+    c.appendChild(el('h1', null, tipo));
+    var sm = el('select', 'campo');
+    sm.appendChild(el('option', null, 'Elige modelo'));
+    modelos.forEach(function (m) {
+      var o = el('option', null, m); o.value = m;
+      if (d.mo === m) o.selected = true;
+      sm.appendChild(o);
+    });
+    sm.onchange = function () { d.mo = sm.value; d.sa = ''; hoja(null); dibuja(); };
+    c.appendChild(sm);
+
+    if (d.mo) {
+      var ss = el('select', 'campo');
+      ss.appendChild(el('option', null, 'Elige sabor'));
+      (S.datos.catalogo || []).filter(function (r) { return r.mo === d.mo; })
+        .forEach(function (r) {
+          var o = el('option', null, r.sa); o.value = r.sa;
+          if (d.sa === r.sa) o.selected = true;
+          ss.appendChild(o);
+        });
+      ss.onchange = function () { d.sa = ss.value; };
+      c.appendChild(ss);
+    }
+
+    if (tipo === 'Ajuste') {
+      c.appendChild(grupo('En qué lugar contaste',
+        ['Casa', 'Maleta', 'Franco casa', 'Franco maleta'], d.ha,
+        function (x) { d.ha = x; hoja(null); dibuja(); }));
+    }
+
+    var g = el('div', 'col g8');
+    g.appendChild(el('div', 'eti', tipo === 'Ajuste' ? 'Piezas que contaste' : 'Piezas que llegaron'));
+    var i = el('input', 'campo');
+    i.type = 'tel'; i.inputMode = 'numeric'; i.value = d.pz;
+    i.oninput = function () { d.pz = Number(i.value) || 0; };
+    g.appendChild(i);
+    c.appendChild(g);
+
+    if (tipo !== 'Ajuste') {
+      /* Es el VALOR de lo que llegó, no lo que pagaste: la mercancía y el
+         dinero van por caminos distintos y casi siempre hay crédito. El pago
+         se registra aparte, con el botón 'Pagar a proveedor'. */
+      var g2 = el('div', 'col g8');
+      g2.appendChild(el('div', 'eti', 'Valor de lo que llegó (opcional)'));
+      var i2 = el('input', 'campo');
+      i2.type = 'tel'; i2.inputMode = 'numeric'; i2.value = d.mn || '';
+      i2.oninput = function () { d.mn = Number(i2.value) || 0; };
+      g2.appendChild(i2);
+      g2.appendChild(el('div', 'mini',
+        'Lo que vale, aunque no lo hayas pagado. El pago se registra aparte.'));
+      c.appendChild(g2);
+      var g3 = el('div', 'col g8');
+      g3.appendChild(el('div', 'eti', '¿A quién le compraste?'));
+      var i3 = el('input', 'campo');
+      i3.type = 'text'; i3.value = d.cl || '';
+      i3.placeholder = 'Aldo, Sean...';
+      i3.oninput = function () { d.cl = i3.value; };
+      g3.appendChild(i3);
+      c.appendChild(g3);
+    }
+
+    var b = el('button', 'b gde', 'Registrar');
+    b.onclick = function () {
+      if (!d.mo || !d.sa) { avisa('Falta modelo o sabor'); return; }
+      encola({
+        t: tipo, q: 'JP', mo: d.mo, sa: d.sa, pz: d.pz, mn: d.mn,
+        de: tipo === 'Ajuste' ? '' : 'Proveedor', ha: d.ha,
+        cl: tipo === 'Ajuste' ? '' : String(d.cl || '').trim(),
+        no: tipo === 'Ajuste' ? 'Ajuste por conteo en ' + d.ha : ''
+      });
+      hoja(null); avisa('Registrado'); baja(true);
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
+}
+
+/* La app propone, JP confirma pieza por pieza: nada se mueve sin que él
+   diga qué sí metió a la maleta y qué no. */
+/* Lo mismo que rellenarMaleta, pero de la casa de Franco a su maleta.
+   Su meta es por modelo, así que los sabores los escoge él: se le
+   muestran los del modelo que trae corto, con tope lo que tiene en casa. */
+/* ----------------------------------- sabores que Franco tiene y JP no */
+
+/* Regla de JP (18 nov): si Franco trae un sabor que a JP ya se le acabó,
+   hay que pedírselo de vuelta. Es stock muerto en manos del repartidor
+   mientras JP no tiene nada que vender de ese sabor. */
+function saboresQueFrancoTieneYJPNo() {
+  return (S.datos.catalogo || []).filter(function (r) {
+    return (Number(r.ca) || 0) === 0 &&
+           ((Number(r.frc) || 0) + (Number(r.frm) || 0)) > 0;
+  });
+}
+
+/* JP recibe piezas de vuelta de Franco. Es el camino contrario al
+   surtido, que hasta hoy era de una sola dirección. */
+function devolucionDeFranco(soloFaltantes) {
+  var lista = soloFaltantes ? saboresQueFrancoTieneYJPNo()
+    : (S.datos.catalogo || []).filter(function (r) {
+        return ((Number(r.frc) || 0) + (Number(r.frm) || 0)) > 0;
+      });
+  if (!lista.length) { avisa('Franco no tiene nada que regresarte'); return; }
+  var sel = {};
+
+  function dibuja() {
+    var c = el('div', 'col g12');
+    c.appendChild(el('h1', null, 'Franco te regresó'));
+    c.appendChild(el('div', 'mini', soloFaltantes
+      ? 'Sabores que él trae y tú ya no tienes en casa. Las piezas regresan a tu Casa.'
+      : 'Lo que te devuelva regresa a tu Casa.'));
+    var cuerpo = el('div', 'col g6');
+    cuerpo.style.cssText = 'max-height:48vh; overflow-y:auto';
+    lista.forEach(function (r) {
+      [['frc', 'Franco casa', 'su casa'], ['frm', 'Franco maleta', 'su maleta']]
+        .forEach(function (lu) {
+          var n = Number(r[lu[0]]) || 0;
+          if (!n) return;
+          var k = r.mo + '|' + r.sa + '|' + lu[1];
+          var ren = el('div', 'ren');
+          var izq = el('div', 'col');
+          izq.appendChild(el('div', null, r.sa));
+          izq.appendChild(el('div', 'mini',
+            r.mo.split(' ').slice(0, 2).join(' ') + ' · ' + n + ' en ' + lu[2]));
+          ren.appendChild(izq);
+          var f = el('div', 'fila');
+          f.style.gap = '8px';
+          var menos = el('button', 'b chico', '−'); menos.style.minWidth = '38px';
+          var num = el('div', null, String(sel[k] || 0));
+          num.style.cssText = 'min-width:22px; text-align:center; font-weight:600';
+          var mas = el('button', 'b chico', '+'); mas.style.minWidth = '38px';
+          menos.onclick = function () { sel[k] = Math.max(0, (sel[k] || 0) - 1); hoja(null); dibuja(); };
+          mas.onclick = function () { sel[k] = Math.min(n, (sel[k] || 0) + 1); hoja(null); dibuja(); };
+          f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
+          ren.appendChild(f);
+          cuerpo.appendChild(ren);
+        });
+    });
+    c.appendChild(cuerpo);
+    var tot = Object.keys(sel).reduce(function (a, k) { return a + sel[k]; }, 0);
+    var b = el('button', 'b gde', tot ? 'Recibí ' + tot + ' piezas' : 'Recibí');
+    b.disabled = !tot;
+    b.onclick = function () {
+      Object.keys(sel).forEach(function (k) {
+        if (!sel[k]) return;
+        var p = k.split('|');
+        encola({ t: 'Devolución', q: 'JP', mo: p[0], sa: p[1], pz: sel[k],
+                 de: p[2], ha: 'Casa', no: 'Franco regresó piezas' });
+      });
+      hoja(null); avisa('Devolución registrada'); pinta();
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
+}
+
+/* ------------------------------------------------- cambio por garantía */
+
+function scriptSabeGarantia() { return Number((S.datos || {}).v || 0) >= 6; }
+
+/* Son dos piezas, no una: sale una buena del lugar de quien hace el cambio
+   y entra la mala del cliente. Casi nunca son el mismo sabor, porque se
+   cambia por lo que haya. La mala va a Defectuosos, un destino que ninguna
+   fórmula de inventario suma: queda contada sin ensuciar el stock. */
+function garantia() {
+  var lugares = S.rol === 'Franco' ? ['Franco maleta', 'Franco casa'] : ['Maleta', 'Casa'];
+  var d = { de: lugares[0], moOut: '', saOut: '', moIn: '', saIn: '', pz: 1, cl: '' };
+  var cat = function () { return S.datos.catalogo || []; };
+
+  function selec(ops, valor, vacio, cb) {
+    var se = el('select', 'campo');
+    var o0 = el('option', null, vacio);
+    o0.value = '';
+    se.appendChild(o0);
+    ops.forEach(function (x) {
+      var o = el('option', null, x.t);
+      o.value = x.v;
+      if (x.v === valor) o.selected = true;
+      se.appendChild(o);
+    });
+    se.onchange = function () { cb(se.value); };
+    return se;
+  }
+
+  function dibuja() {
+    var campo = lugarACampo(d.de);
+    var hay = cat().filter(function (r) { return (Number(r[campo]) || 0) > 0; });
+
+    var c = el('div', 'col g12');
+    c.appendChild(el('h1', null, 'Cambio por garantía'));
+    c.appendChild(el('div', 'mini',
+      'Sale una buena y entra la que te devolvieron. No cuenta como venta y no genera comisión.'));
+
+    var segl = el('div', 'seg');
+    lugares.forEach(function (l) {
+      var b = el('button', d.de === l ? 'on' : '', nombreLugar(l));
+      b.onclick = function () {
+        d.de = l; d.moOut = ''; d.saOut = ''; hoja(null); dibuja();
+      };
+      segl.appendChild(b);
+    });
+    c.appendChild(segl);
+
+    /* la que entregas */
+    c.appendChild(el('div', 'eti', 'La que entregas'));
+    var mosOut = [];
+    hay.forEach(function (r) { if (mosOut.indexOf(r.mo) < 0) mosOut.push(r.mo); });
+    c.appendChild(selec(mosOut.map(function (m) { return { v: m, t: m }; }), d.moOut,
+      'Modelo…', function (v) { d.moOut = v; d.saOut = ''; hoja(null); dibuja(); }));
+    if (d.moOut) {
+      var sabsOut = hay.filter(function (r) { return r.mo === d.moOut; });
+      c.appendChild(selec(sabsOut.map(function (r) {
+        return { v: r.sa, t: r.sa + '  (' + r[campo] + ')' };
+      }), d.saOut, 'Sabor…', function (v) { d.saOut = v; hoja(null); dibuja(); }));
+    }
+
+    /* la que te devolvieron */
+    c.appendChild(el('div', 'eti', 'La que te devolvieron'));
+    var mosIn = [];
+    cat().forEach(function (r) { if (mosIn.indexOf(r.mo) < 0) mosIn.push(r.mo); });
+    c.appendChild(selec(mosIn.map(function (m) { return { v: m, t: m }; }), d.moIn,
+      'Modelo…', function (v) { d.moIn = v; d.saIn = ''; hoja(null); dibuja(); }));
+    if (d.moIn) {
+      var sabsIn = cat().filter(function (r) { return r.mo === d.moIn; });
+      c.appendChild(selec(sabsIn.map(function (r) { return { v: r.sa, t: r.sa }; }), d.saIn,
+        'Sabor…', function (v) { d.saIn = v; hoja(null); dibuja(); }));
+    }
+
+    var fp = el('div', 'fila');
+    fp.style.gap = '8px';
+    var gp = el('div', 'col g6');
+    gp.style.flex = '1';
+    gp.appendChild(el('div', 'eti', 'Cuántas'));
+    var ip = el('input', 'campo');
+    ip.type = 'tel'; ip.inputMode = 'numeric'; ip.value = d.pz;
+    ip.oninput = function () { d.pz = Math.max(1, Number(ip.value) || 1); };
+    gp.appendChild(ip);
+    var gc = el('div', 'col g6');
+    gc.style.flex = '2';
+    gc.appendChild(el('div', 'eti', 'Cliente'));
+    var ic = el('input', 'campo');
+    ic.value = d.cl;
+    ic.oninput = function () { d.cl = ic.value; };
+    gc.appendChild(ic);
+    fp.appendChild(gp); fp.appendChild(gc);
+    c.appendChild(fp);
+
+    var listo = d.moOut && d.saOut && d.moIn && d.saIn;
+    var b = el('button', 'b gde', 'Registrar el cambio');
+    b.disabled = !listo;
+    b.onclick = function () {
+      var ancla = folio();
+      encola({ f: ancla, rf: ancla, t: 'Garantía', q: S.rol,
+               mo: d.moOut, sa: d.saOut, pz: d.pz, mn: 0,
+               de: d.de, ha: 'Cliente', cl: d.cl,
+               no: 'Garantía · entregada' });
+      /* Dos montones, no uno: si todos los defectuosos caen en el mismo
+         lugar no hay forma de saber si Franco todavía los trae. */
+      encola({ rf: ancla, t: 'Garantía', q: S.rol,
+               mo: d.moIn, sa: d.saIn, pz: d.pz, mn: 0,
+               de: 'Cliente',
+               ha: S.rol === 'Franco' ? 'Defectuosos Franco' : 'Defectuosos',
+               cl: d.cl,
+               no: 'Garantía · la que devolvió' });
+      hoja(null);
+      avisa('Cambio registrado');
+      pinta();
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
+}
+
+function rellenarMiMaleta() {
+  var meta = {};
+  faltaFranco().forEach(function (x) { meta[x.mo] = x; });
+  var suyos = (S.datos.catalogo || []).filter(function (r) { return (Number(r.frc) || 0) > 0; });
+  if (!suyos.length) { avisa('No tienes nada en tu casa para pasar'); return; }
+  var sel = {};
+
+  function dibuja() {
+    var c = el('div', 'col g12');
+    c.appendChild(el('h1', null, 'Rellenar mi maleta'));
+    /* Con la meta por modelo la app ya no puede adivinar los sabores: los
+       escoge él, que para eso sabe lo que vende. Arriba de cada modelo va
+       cuántas le faltan y cuántas lleva puestas. */
+    c.appendChild(el('div', 'mini',
+      'De tu casa a tu maleta. Escoge los sabores; arriba de cada modelo te digo cuántas te faltan.'));
+    var cuerpo = el('div', 'col g6');
+    cuerpo.style.cssText = 'max-height:48vh; overflow-y:auto';
+    var moActual = '';
+    suyos.forEach(function (r) {
+      if (r.mo !== moActual) {
+        moActual = r.mo;
+        var m = meta[r.mo];
+        var puestas = suyos.filter(function (y) { return y.mo === r.mo; })
+          .reduce(function (a, y) { return a + (sel[y.mo + '|' + y.sa] || 0); }, 0);
+        var cab = el('div', 'ren');
+        var ct = el('div', 'eti', r.mo);
+        cab.appendChild(ct);
+        var falta = m ? m.faltaMaleta : 0;
+        cab.appendChild(el('div', 'mini', (falta ? 'faltan ' + falta : 'completo') +
+          (puestas ? ' · metes ' + puestas : '')));
+        cuerpo.appendChild(cab);
+      }
+      var k = r.mo + '|' + r.sa;
+      var enCasa = Number(r.frc) || 0;
+      var ren = el('div', 'ren');
+      var izq = el('div', 'col');
+      izq.appendChild(el('div', null, r.sa));
+      izq.appendChild(el('div', 'mini', 'maleta ' + (Number(r.frm) || 0) +
+        ' · en tu casa ' + enCasa));
+      ren.appendChild(izq);
+      var f = el('div', 'fila');
+      f.style.gap = '8px';
+      var menos = el('button', 'b chico', '−'); menos.style.minWidth = '38px';
+      var num = el('div', null, String(sel[k] || 0));
+      num.style.cssText = 'min-width:22px; text-align:center; font-weight:600';
+      var mas = el('button', 'b chico', '+'); mas.style.minWidth = '38px';
+      menos.onclick = function () { sel[k] = Math.max(0, (sel[k] || 0) - 1); hoja(null); dibuja(); };
+      mas.onclick = function () { sel[k] = Math.min(enCasa, (sel[k] || 0) + 1); hoja(null); dibuja(); };
+      f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
+      ren.appendChild(f);
+      cuerpo.appendChild(ren);
+    });
+    c.appendChild(cuerpo);
+
+    var n = Object.keys(sel).reduce(function (a, k) { return a + (sel[k] || 0); }, 0);
+    var b = el('button', 'b gde', n ? 'Pasé ' + n + ' piezas a mi maleta' : 'No metí nada');
+    b.disabled = !n;
+    b.onclick = function () {
+      Object.keys(sel).forEach(function (k) {
+        if (!sel[k]) return;
+        var pz = k.split('|');
+        encola({ t: 'Surtido', q: 'Franco', mo: pz[0], sa: pz[1], pz: sel[k],
+                 de: 'Franco casa', ha: 'Franco maleta' });
+      });
+      hoja(null); avisa('Maleta actualizada'); pinta();
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
+}
+
+function rellenarMaleta() {
+  var falta = faltaMaleta();
+  var sel = {};
+  falta.forEach(function (x) { sel[x.mo + '|' + x.sa] = x.n; });
+
+  function dibuja() {
+    var c = el('div', 'col g12');
+    c.appendChild(el('h1', null, 'Rellenar la maleta'));
+    c.appendChild(el('div', 'mini',
+      'Ya traen la cantidad que falta. Bájale o súbele a lo que de verdad metiste.'));
+    var cuerpo = el('div', 'col g6');
+    cuerpo.style.cssText = 'max-height:48vh; overflow-y:auto';
+    falta.forEach(function (x) {
+      var k = x.mo + '|' + x.sa;
+      var ren = el('div', 'ren');
+      var izq = el('div', 'col');
+      izq.appendChild(el('div', null, x.sa));
+      izq.appendChild(el('div', 'mini', x.mo + ' · ' + x.ca + ' en casa'));
+      ren.appendChild(izq);
+      var f = el('div', 'fila');
+      f.style.gap = '8px';
+      var menos = el('button', 'b chico', '−'); menos.style.minWidth = '38px';
+      var num = el('div', null, String(sel[k]));
+      num.style.cssText = 'min-width:22px; text-align:center; font-weight:600';
+      var mas = el('button', 'b chico', '+'); mas.style.minWidth = '38px';
+      menos.onclick = function () { sel[k] = Math.max(0, sel[k] - 1); hoja(null); dibuja(); };
+      mas.onclick = function () { sel[k] = Math.min(x.ca, sel[k] + 1); hoja(null); dibuja(); };
+      f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
+      ren.appendChild(f);
+      cuerpo.appendChild(ren);
+    });
+    c.appendChild(cuerpo);
+
+    var n = Object.keys(sel).reduce(function (a, k) { return a + sel[k]; }, 0);
+    var b = el('button', 'b gde', n ? 'Pasé ' + n + ' piezas a la maleta' : 'No metí nada');
+    b.disabled = !n;
+    b.onclick = function () {
+      Object.keys(sel).forEach(function (k) {
+        if (!sel[k]) return;
+        var pz = k.split('|');
+        encola({ t: 'Surtido', q: 'JP', mo: pz[0], sa: pz[1], pz: sel[k], de: 'Casa', ha: 'Maleta' });
+      });
+      hoja(null); avisa('Maleta actualizada'); pinta();
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  if (!falta.length) { avisa('La maleta está completa'); return; }
+  dibuja();
+}
+
+/* ------------------------------------------------------------------ franco */
+
+function vFranco(p) {
+  var sf = S.datos.saldoFranco || {};
+  p.appendChild(el('h1', null, 'Franco'));
+  barraCola(p);
+
+  var c = el('div', 'card col g12');
+  c.style.marginTop = '14px';
+  c.appendChild(el('div', 'mini', 'Te debe'));
+  var n = el('div', 'num', pesos(sf.debe));
+  n.style.color = 'var(--ink)';
+  c.appendChild(n);
+  var det = el('div', 'col');
+  det.style.cssText = 'border-top:.5px solid var(--sep); padding-top:10px';
+  [['Piezas vendidas', sf.piezas || 0], ['− Sus comisiones', pesos(sf.comision)],
+   ['− Ya te pagó', pesos(sf.pagado)]].forEach(function (x) {
+    var f = el('div', 'fila');
+    f.style.cssText = 'font-size:13px; padding:3px 0';
+    f.appendChild(el('div', 'sub', x[0]));
+    f.appendChild(el('div', null, String(x[1])));
+    det.appendChild(f);
+  });
+  c.appendChild(det);
+  var b = el('button', 'b gde', 'Me pagó');
+  b.style.cssText = 'width:100%; min-height:46px; font-size:15px';
+  b.onclick = pagoFranco;
+  c.appendChild(b);
+  p.appendChild(c);
+
+  var stock = (S.datos.catalogo || []).filter(function (r) { return r.fr > 0; });
+  var cs = el('div', 'card col g8');
+  cs.style.marginTop = '12px';
+  var fs = el('div', 'fila');
+  var t = el('div', null, 'Su stock');
+  t.style.cssText = 'font-size:15px; font-weight:600';
+  fs.appendChild(t);
+  fs.appendChild(el('div', 'sub', stock.reduce(function (a, r) { return a + r.fr; }, 0) + ' piezas'));
+  cs.appendChild(fs);
+  cs.appendChild(el('div', 'mini', 'En su casa ' +
+    (S.datos.catalogo || []).reduce(function (a, r) { return a + (r.frc || 0); }, 0) +
+    ' · en su maleta ' +
+    (S.datos.catalogo || []).reduce(function (a, r) { return a + (r.frm || 0); }, 0)));
+  stock.slice(0, 8).forEach(function (r) {
+    var ren = el('div', 'ren');
+    ren.appendChild(el('div', null, r.mo.split(' ').slice(0, 2).join(' ') + ' · ' + r.sa));
+    ren.appendChild(el('div', 'mini', (r.frc || 0) + ' casa · ' + (r.frm || 0) + ' maleta'));
+    cs.appendChild(ren);
+  });
+  if (stock.length > 8) cs.appendChild(el('div', 'mini', 'y ' + (stock.length - 8) + ' sabores más'));
+  p.appendChild(cs);
+
+  /* Su meta: la pone él, pero JP la ve y la puede cambiar. */
+  var gm = el('div', 'group');
+  gm.style.marginTop = '12px';
+  var renm = el('div', 'ren');
+  var izm = el('div', 'col');
+  izm.appendChild(el('div', null, 'Sus metas'));
+  var ff2 = faltaFranco();
+  var fM2 = ff2.reduce(function (a, b) { return a + b.faltaMaleta; }, 0);
+  var fC2 = ff2.reduce(function (a, b) { return a + b.faltaCasa; }, 0);
+  izm.appendChild(el('div', 'mini', !hayMetaPuesta()
+    ? 'Todavía no las pone'
+    : ((fM2 || fC2)
+        ? ('le faltan ' + fM2 + ' en la maleta y ' + fC2 + ' en su casa')
+        : 'Está completo en las dos')));
+  renm.appendChild(izm);
+  renm.appendChild(el('div', 'mini', '›'));
+  renm.onclick = function () { S.tab = 'meta'; pinta(); };
+  gm.appendChild(renm);
+
+  var rend = el('div', 'ren');
+  var izd = el('div', 'col');
+  izd.appendChild(el('div', null, 'Me regresó piezas'));
+  izd.appendChild(el('div', 'mini', 'regresan a tu Casa'));
+  rend.appendChild(izd);
+  rend.appendChild(el('div', 'mini', '›'));
+  rend.onclick = function () { devolucionDeFranco(false); };
+  gm.appendChild(rend);
+  p.appendChild(gm);
+
+  var bs = el('button', 'b', 'Surtirle de casa');
+  bs.style.cssText = 'width:100%; margin-top:12px';
+  bs.onclick = surtido;
+  p.appendChild(bs);
+}
+
+function pagoFranco() {
+  var d = { mn: 0, fp: 'Efectivo', ef: 0 };
+  function dibuja() {
+    var c = el('div', 'col g16');
+    c.appendChild(el('h1', null, 'Franco te pagó'));
+    var g = el('div', 'col g8');
+    g.appendChild(el('div', 'eti', 'Cuánto te dio'));
+    var i = el('input', 'campo');
+    i.type = 'tel'; i.inputMode = 'numeric'; i.value = d.mn || '';
+    i.oninput = function () { d.mn = Number(i.value) || 0; };
+    g.appendChild(i);
+    c.appendChild(g);
+    /* Antes se forzaba 'Efectivo'. Si Franco transfería su corte quedaba
+       registrado como efectivo, y la caja de JP no podía cuadrar nunca. */
+    c.appendChild(grupo('Cómo te pagó', ['Efectivo', 'Nu', 'Mixto'], d.fp,
+      function (x) { d.fp = x; dibuja(); }, { 'Nu': 'Transferencia' }));
+    if (d.fp === 'Mixto') {
+      var gm = el('div', 'col g8');
+      gm.appendChild(el('div', 'eti', 'Cuánto en efectivo'));
+      var ie = el('input', 'campo');
+      ie.type = 'tel'; ie.inputMode = 'numeric'; ie.value = d.ef || '';
+      ie.oninput = function () { d.ef = Number(ie.value) || 0; };
+      gm.appendChild(ie);
+      gm.appendChild(el('div', 'mini', 'El resto se registra como transferencia.'));
+      c.appendChild(gm);
+    }
+    var b = el('button', 'b gde', 'Registrar pago');
+    b.onclick = function () {
+      if (!d.mn) { avisa('Falta el monto'); return; }
+      var ef = d.fp === 'Efectivo' ? d.mn : (d.fp === 'Mixto' ? d.ef : 0);
+      if (d.fp === 'Mixto' && (ef <= 0 || ef >= d.mn)) {
+        avisa('En mixto el efectivo va entre 1 y ' + (d.mn - 1)); return;
+      }
+      encola({ t: 'Pago de vendedor', q: 'Franco', mn: d.mn, fp: d.fp, ef: ef });
+      hoja(null); avisa('Pago registrado'); baja(true);
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
+}
+
+/* Pagarle al proveedor es un movimiento propio y no un campo de la entrada:
+   la mercancía llega un día y el dinero sale otro, y casi siempre a crédito.
+   Deuda con un proveedor = lo que le has comprado menos lo que le has pagado. */
+function pagoProveedor() {
+  var d = { mn: 0, fp: 'Efectivo', cl: '', no: '' };
+  function dibuja() {
+    var c = el('div', 'col g16');
+    c.appendChild(el('h1', null, 'Pagar a proveedor'));
+    var g0 = el('div', 'col g8');
+    g0.appendChild(el('div', 'eti', '¿A quién le pagaste?'));
+    var i0 = el('input', 'campo');
+    i0.type = 'text'; i0.value = d.cl;
+    i0.placeholder = 'Aldo, Sean...';
+    i0.oninput = function () { d.cl = i0.value; };
+    g0.appendChild(i0);
+    c.appendChild(g0);
+    var g = el('div', 'col g8');
+    g.appendChild(el('div', 'eti', 'Cuánto le pagaste'));
+    var i = el('input', 'campo');
+    i.type = 'tel'; i.inputMode = 'numeric'; i.value = d.mn || '';
+    i.oninput = function () { d.mn = Number(i.value) || 0; };
+    g.appendChild(i);
+    c.appendChild(g);
+    c.appendChild(grupo('De dónde salió', ['Efectivo', 'Nu', 'TDC'], d.fp,
+      function (x) { d.fp = x; dibuja(); },
+      { 'Nu': 'Transferencia', 'TDC': 'Tarjeta' }));
+    var gn = el('div', 'col g8');
+    gn.appendChild(el('div', 'eti', 'Nota (opcional)'));
+    var inn = el('input', 'campo');
+    inn.type = 'text'; inn.value = d.no;
+    inn.placeholder = 'De qué pedido fue';
+    inn.oninput = function () { d.no = inn.value; };
+    gn.appendChild(inn);
+    c.appendChild(gn);
+    var b = el('button', 'b gde', 'Registrar pago');
+    b.onclick = function () {
+      if (!d.cl.trim()) { avisa('Falta a quién le pagaste'); return; }
+      if (!d.mn) { avisa('Falta el monto'); return; }
+      encola({ t: 'Pago a proveedor', q: 'JP', mn: d.mn, fp: d.fp,
+               ef: d.fp === 'Efectivo' ? d.mn : 0,
+               cl: d.cl.trim(), no: d.no });
+      hoja(null); avisa('Pago registrado'); baja(true);
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
+}
+
+function surtido(pedido) {
+  var sel = {};
+  /* Si viene de un pedido, llega lleno con lo que pidió: JP solo confirma
+     o ajusta. El Surtido lleva el ancla del pedido para que quede atendido. */
+  if (pedido) {
+    pedido.lineas.forEach(function (l) {
+      sel[l.modelo + '|' + l.sabor] = l.piezas;
+    });
+  }
+  function dibuja() {
+    var c = el('div', 'col g12');
+    c.appendChild(el('h1', null, pedido ? 'Surtir el pedido' : 'Surtirle de casa'));
+    c.appendChild(el('div', 'mini', pedido
+      ? 'Ya viene con lo que te pidió. Cambia lo que quieras antes de entregar.'
+      : 'Elige cuántas piezas de cada sabor le entregas.'));
+    var cuerpo = el('div', 'col g6');
+    cuerpo.style.cssText = 'max-height:46vh; overflow-y:auto';
+    (S.datos.catalogo || []).filter(function (r) { return r.ca > 0; })
+      .forEach(function (r) {
+        var k = r.mo + '|' + r.sa;
+        var ren = el('div', 'ren');
+        ren.appendChild(el('div', null, r.mo.split(' ').slice(0, 2).join(' ') + ' · ' + r.sa +
+          '  (' + r.ca + ' en casa)'));
+        var f = el('div', 'fila');
+        f.style.gap = '8px';
+        var menos = el('button', 'b chico', '−'); menos.style.minWidth = '34px';
+        var num = el('div', null, String(sel[k] || 0));
+        num.style.minWidth = '20px';
+        var mas = el('button', 'b chico', '+'); mas.style.minWidth = '34px';
+        menos.onclick = function () { sel[k] = Math.max(0, (sel[k] || 0) - 1); hoja(null); dibuja(); };
+        mas.onclick = function () { sel[k] = Math.min(r.ca, (sel[k] || 0) + 1); hoja(null); dibuja(); };
+        f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
+        ren.appendChild(f);
+        cuerpo.appendChild(ren);
+      });
+    c.appendChild(cuerpo);
+    var n = Object.keys(sel).reduce(function (a, k) { return a + sel[k]; }, 0);
+    var b = el('button', 'b gde', n ? 'Entregar ' + n + ' piezas' : 'Entregar surtido');
+    b.disabled = !n;
+    b.onclick = function () {
+      Object.keys(sel).forEach(function (k) {
+        if (!sel[k]) return;
+        var pz = k.split('|');
+        encola({ t: 'Surtido', q: 'JP', mo: pz[0], sa: pz[1], pz: sel[k],
+                 de: 'Casa', ha: 'Franco casa',
+                 rf: pedido ? pedido.ancla : '',
+                 no: pedido ? 'Surte el pedido de las ' + pedido.hora : '' });
+      });
+      if (pedido) S.datos.pedidos = (S.datos.pedidos || []).filter(function (x) {
+        return x.ancla !== pedido.ancla;
+      });
+      hoja(null); avisa('Surtido registrado'); pinta(); baja(true);
+    };
+    c.appendChild(b);
+    hoja(c);
+  }
+  dibuja();
+}
+
+/* ------------------------------------------------------------------ resultados */
+
+function vResultados(p) {
+  p.appendChild(el('h1', null, 'Resultados'));
+  var seg = el('div', 'seg');
+  seg.style.margin = '12px 0';
+  [['dia', 'Un día'], ['semana', 'Semana'], ['mes', 'Mes']].forEach(function (o) {
+    var b = el('button', S.res.per === o[0] ? 'on' : '', o[1]);
+    b.onclick = function () {
+      S.res.per = o[0]; S.res.data = null;
+      if (o[0] === 'dia' && !S.res.dia) S.res.dia = hoyISO();
+      pinta(); bajaResultados();
+    };
+    seg.appendChild(b);
+  });
+  p.appendChild(seg);
+
+  /* Navegar días: flechas y calendario, como en la app anterior. */
+  if (S.res.per === 'dia') {
+    var dia = S.res.dia || hoyISO();
+    var mueve = function (n) {
+      var pz = dia.split('-');
+      var x = new Date(Number(pz[0]), Number(pz[1]) - 1, Number(pz[2]));
+      x.setDate(x.getDate() + n);
+      var nuevo = x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' +
+        String(x.getDate()).padStart(2, '0');
+      if (nuevo > hoyISO()) return;
+      S.res.dia = nuevo; S.res.data = null; pinta(); bajaResultados();
+    };
+    var nav = el('div', 'fila');
+    nav.style.gap = '8px';
+    var bA = el('button', 'b chico', '‹');
+    bA.style.minWidth = '46px';
+    bA.onclick = function () { mueve(-1); };
+    var ip = el('input');
+    ip.type = 'date'; ip.value = dia; ip.max = hoyISO();
+    ip.className = 'b chico';
+    ip.style.cssText = 'flex:1; min-width:0; padding:9px 10px';
+    ip.onchange = function () {
+      S.res.dia = ip.value || hoyISO(); S.res.data = null; pinta(); bajaResultados();
+    };
+    var bS = el('button', 'b chico', '›');
+    bS.style.minWidth = '46px';
+    bS.disabled = dia >= hoyISO();
+    bS.onclick = function () { mueve(1); };
+    nav.appendChild(bA); nav.appendChild(ip); nav.appendChild(bS);
+    p.appendChild(nav);
+    var titulo = el('div', 'cap', dia === hoyISO() ? 'Hoy' : fechaBonita(dia));
+    p.appendChild(titulo);
+  }
+
+  var d = S.res.data;
+  if (!d) { p.appendChild(el('div', 'sub', 'Trayendo los números…')); return; }
+
+  var cab = el('div', 'col g6');
+  cab.appendChild(el('div', 'mini', (S.rol === 'JP' ? 'Utilidad' : 'Vendido') +
+    (S.res.per === 'dia' ? ' de ese día'
+      : (S.res.per === 'semana' ? ' de los últimos 7 días' : ' de los últimos 30 días'))));
+  var n = el('div', 'num', pesos(S.rol === 'JP' ? d.utilidad : d.ingresos));
+  n.style.fontSize = '40px';
+  cab.appendChild(n);
+  p.appendChild(cab);
+
+  var tres = el('div', 'fila g8');
+  tres.style.cssText = 'gap:8px; margin:12px 0';
+  [['Piezas', d.piezas], ['Ingresos', pesos(d.ingresos)], ['Por cobrar', pesos(d.porCobrar)]]
+    .forEach(function (x) {
+      var c = el('div', 'card col');
+      c.style.cssText = 'flex:1; padding:11px 12px';
+      c.appendChild(el('div', 'mini', x[0]));
+      var v = el('div', null, String(x[1]));
+      v.style.cssText = 'font-size:19px; font-weight:700';
+      c.appendChild(v);
+      tres.appendChild(c);
+    });
+  p.appendChild(tres);
+
+  if (d.dia && d.dia.length) {
+    var cg = el('div', 'card col g8');
+    cg.appendChild(el('div', 'mini', S.rol === 'JP' ? 'Utilidad por día' : 'Vendido por día'));
+    var max = Math.max.apply(null, d.dia.map(function (x) {
+      return Math.abs(S.rol === 'JP' ? x.utilidad : x.ingresos);
+    })) || 1;
+    var bars = el('div', 'barras');
+    d.dia.slice(-14).forEach(function (x, i, arr) {
+      var v = Math.abs(S.rol === 'JP' ? x.utilidad : x.ingresos);
+      var b = el('div', i === arr.length - 1 ? 'hoy' : '');
+      b.style.height = Math.max(3, Math.round(100 * v / max)) + '%';
+      bars.appendChild(b);
+    });
+    cg.appendChild(bars);
+    p.appendChild(cg);
+  }
+
+  if (S.res.per === 'dia' && (d.ultimas || []).length) {
+    p.appendChild(el('div', 'cap', 'Ventas de ese día'));
+    var gd2 = el('div', 'group');
+    d.ultimas.forEach(function (u) {
+      var ren = el('div', 'ren');
+      var iz = el('div', 'col');
+      iz.appendChild(el('div', null, (u.pr === '2x' ? '2× ' : '') +
+        u.modelo.split(' ').slice(0, 2).join(' ') + ' · ' + u.sabor));
+      iz.appendChild(el('div', 'mini', u.hora +
+        (S.rol === 'JP' && u.quien !== 'JP' ? ' · ' + u.quien : '') +
+        (u.fp === 'Pendiente' ? ' · debe' : '')));
+      ren.appendChild(iz);
+      ren.appendChild(el('div', 'tab-num', pesos(u.monto)));
+      gd2.appendChild(ren);
+    });
+    p.appendChild(gd2);
+  }
+
+  var dims = (S.rol === 'JP')
+    ? [['modelo', 'Modelo'], ['sabor', 'Sabor'], ['quien', 'Quién vendió'], ['dia', 'Día']]
+    : [['modelo', 'Modelo'], ['sabor', 'Sabor'], ['dia', 'Día']];
+  var fd = el('div', 'fila');
+  fd.style.cssText = 'gap:7px; margin:12px 0; overflow-x:auto';
+  dims.forEach(function (o) {
+    var b = el('button', 'b chico' + (S.res.dim === o[0] ? ' on' : ''), o[1]);
+    b.style.whiteSpace = 'nowrap';
+    b.onclick = function () { S.res.dim = o[0]; pinta(); };
+    fd.appendChild(b);
+  });
+  p.appendChild(fd);
+
+  var filas = d[S.res.dim] || [];
+  var max2 = Math.max.apply(null, filas.map(function (x) {
+    return Math.abs(S.rol === 'JP' ? x.utilidad : x.ingresos);
+  })) || 1;
+  var w = el('div', 'col');
+  filas.forEach(function (x) {
+    var box = el('div', 'col g6');
+    box.style.cssText = 'padding:9px 0; border-top:.5px solid var(--sep)';
+    var f = el('div', 'fila');
+    f.appendChild(el('div', null, x.k));
+    var der = el('div', 'fila');
+    der.style.gap = '12px';
+    der.appendChild(el('div', 'sub', x.piezas + ' pz'));
+    var v = el('div', null, pesos(S.rol === 'JP' ? x.utilidad : x.ingresos));
+    v.style.fontWeight = '600';
+    der.appendChild(v);
+    f.appendChild(der);
+    box.appendChild(f);
+    var bar = el('div', 'barra');
+    bar.style.width = Math.max(2, Math.round(100 *
+      Math.abs(S.rol === 'JP' ? x.utilidad : x.ingresos) / max2)) + '%';
+    box.appendChild(bar);
+    w.appendChild(box);
+  });
+  p.appendChild(w);
+
+  if (S.rol === 'JP' && d.francoDeja !== undefined) {
+    var cf = el('div', 'card ac fila');
+    cf.style.marginTop = '12px';
+    var ci = el('div', 'col g6');
+    var t = el('div', null, 'Lo que te deja Franco');
+    t.style.cssText = 'font-size:14px; font-weight:600; color:var(--warn)';
+    ci.appendChild(t);
+    ci.appendChild(el('div', 'mini', 'ya sin su comisión'));
+    cf.appendChild(ci);
+    var v2 = el('div', null, pesos(d.francoDeja));
+    v2.style.cssText = 'font-size:20px; font-weight:700';
+    cf.appendChild(v2);
+    p.appendChild(cf);
+  }
+}
+
+/* ------------------------------------------------------------------ ajustes */
+
+function vAjustes() {
+  var c = el('div', 'col g16');
+  c.appendChild(el('h1', null, 'Ajustes'));
+  c.appendChild(el('div', 'mini', S.rol === 'JP'
+    ? 'Precios, costos, comisiones y vendedores se cambian en el Sheet, no aquí.'
+    : 'Si algo no cuadra, avísale a JP: los precios y las comisiones se cambian de su lado.'));
+
+  var b1 = el('button', 'b', 'Actualizar catálogo y stock');
+  b1.onclick = function () { hoja(null); baja(); avisa('Actualizando…'); };
+  c.appendChild(b1);
+
+  var n = cola().length;
+  var b2 = el('button', 'b', n ? 'Subir ' + n + ' movimientos pendientes' : 'No hay nada por subir');
+  b2.disabled = !n;
+  b2.onclick = function () { hoja(null); sube(); };
+  c.appendChild(b2);
+
+  var b3 = el('button', 'b', 'Salir y olvidar el PIN de este celular');
+  b3.onclick = function () {
+    set(LS.pin, ''); set(LS.cat, ''); set(LS.quien, '');
+    S.datos = null; S.rol = ''; vInventario.lugar = '';
+    hoja(null); pidePin('');
+  };
+  c.appendChild(b3);
+  hoja(c);
+}
+
+arranca();
+/* Le avisa al index que app.js llegó entero y arrancó sin tronar. Va
+   DESPUÉS de arranca() a propósito: si arranca() truena, esto no se pone
+   y el index lo dice. Sin esta red, la app que no arranca se ve como una
+   pantalla negra, sin una sola palabra: pasó el 20 nov con datos móviles. */
+try { window.vqListo = true; } catch (e) {}
+
 </script>
-<script src="app.js?v=25" onerror="vqFallo('no se bajó app.js')"></script>
 <script>
-/* app.js corre de corrido, así que para cuando llega aquí ya puso vqListo.
-   Si no está, llegó pero tronó a la mitad. */
-if (!window.vqListo) vqFallo('se bajó pero no arrancó');
+/* Si la app trono a la mitad, la pantalla se quedaria muda. Esto lo dice. */
+if (!window.vqListo) {
+  var w = document.querySelector("#pantalla .wrap");
+  if (w) { w.innerHTML = "";
+    var h1 = document.createElement("h1"); h1.textContent = "No abrio";
+    var p1 = document.createElement("div"); p1.className = "sub";
+    p1.textContent = "La app se cargo pero no arranco. Reintenta; si sigue igual, avisale a JP.";
+    var b1 = document.createElement("button"); b1.className = "b gde";
+    b1.textContent = "Reintentar"; b1.onclick = function () { location.reload(); };
+    w.appendChild(h1); w.appendChild(p1); w.appendChild(b1); }
+}
 </script>
 </body>
 </html>
