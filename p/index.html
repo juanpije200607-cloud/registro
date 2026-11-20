@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
+<title>Registro</title>
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+html,body{margin:0;height:100%;background:#f2f2f4;color:#1d1d1f;
+ font:16px/1.4 -apple-system,system-ui,sans-serif}
+@media (prefers-color-scheme:dark){html,body{background:#000;color:#f5f5f7}}
+#carga{padding:48px 24px;display:flex;flex-direction:column;gap:14px;max-width:480px;margin:0 auto}
+#carga h1{font:700 30px/1.1 -apple-system,system-ui,sans-serif;margin:0}
+#carga .s{color:#8a8a8f;font-size:15px}
+#carga .t{height:6px;background:#d8d8dd;border-radius:3px;overflow:hidden}
+#carga .t i{display:block;height:100%;width:0;background:#1d1d1f;border-radius:3px;transition:width .25s}
+#carga button{appearance:none;border:0;border-radius:14px;background:#1d1d1f;color:#fff;
+ font:600 17px -apple-system,system-ui,sans-serif;min-height:52px;display:none;margin-top:6px}
+@media (prefers-color-scheme:dark){
+ #carga .t{background:#2c2c2e}#carga .t i{background:#f5f5f7}
+ #carga button{background:#f5f5f7;color:#000}}
+</style>
+</head>
+<body>
+<div id="pantalla"><div class="wrap">
+<div id="carga">
+<h1>Vapor QRO</h1>
+<div class="s" id="msg">Abriendo…</div>
+<div class="t"><i id="bar"></i></div>
+<button id="otra">Reintentar</button>
+</div>
+</div></div>
+<nav id="nav"></nav>
+<div id="aviso"></div>
+<div id="hoja"><div id="hojaIn"></div></div>
+<script>
+/* ARRANQUE POR PEDAZOS
+ *
+ * Esta página pesa ~3 KB y es lo único que se baja cada vez. La app (114 KB)
+ * se baja UNA vez, en pedazos de 20 KB, y se queda guardada en el teléfono.
+ *
+ * Por qué: con datos malos la descarga de 114 KB no falla, se CUELGA, y una
+ * descarga colgada no se recupera sola. En pedazos chicos, cada uno tiene su
+ * reloj: si se cuelga, se corta y se vuelve a pedir. Y cada pedazo que llega
+ * se guarda, así que si te quedas sin señal en el 4 de 6, al volver a abrir
+ * sigue desde el 4.
+ *
+ * Una vez completa, la app abre SIN RED. La señal solo hace falta para traer
+ * los datos del Sheet, que son unos pocos KB.
+ */
+(function () {
+  var P = 'vqb.';        /* llaves del arranque, aparte de las de la app */
+  var TROZO = 20000;     /* bytes por pedazo */
+  var LIMITE = 8000;     /* ms antes de dar por colgado un pedazo */
+  var INTENTOS = 4;      /* reintentos por pedazo antes de rendirse */
+
+  var msg = document.getElementById('msg');
+  var bar = document.getElementById('bar');
+  var otra = document.getElementById('otra');
+  var caja = document.getElementById('carga');
+  otra.onclick = function () { location.reload(); };
+
+  function di(t) { msg.textContent = t; }
+  function pct(p) { bar.style.width = Math.round(p * 100) + '%'; }
+  function rendirse(t) { di(t); otra.style.display = 'block'; }
+
+  function g(k) { try { return localStorage.getItem(P + k); } catch (e) { return null; } }
+  function s(k, v) { try { localStorage.setItem(P + k, v); return true; } catch (e) { return false; } }
+  function q(k) { try { localStorage.removeItem(P + k); } catch (e) {} }
+
+  /* Una petición con reloj: si no contesta a tiempo, se corta. Eso es lo
+     que convierte una descarga colgada en un reintento. */
+  function pide(url, rango) {
+    var ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    var o = { cache: 'no-store' };
+    if (ctl) o.signal = ctl.signal;
+    if (rango) o.headers = { Range: 'bytes=' + rango };
+    var reloj = setTimeout(function () { if (ctl) ctl.abort(); }, LIMITE);
+    return fetch(url, o).then(function (r) {
+      clearTimeout(reloj);
+      if (!r.ok && r.status !== 206) throw new Error('HTTP ' + r.status);
+      return r.text().then(function (t) { return { texto: t, rango: r.status === 206 }; });
+    }, function (e) { clearTimeout(reloj); throw e; });
+  }
+
+  function enciende(todo) {
+    var i = todo.indexOf('/*==VQ==*/');
+    if (i < 0) { rendirse('Lo que se bajó no es la app. Reintenta.'); return; }
+    var hoja = document.createElement('style');
+    hoja.textContent = todo.slice(0, i);
+    document.head.appendChild(hoja);
+    if (caja.parentNode) caja.parentNode.removeChild(caja);
+    try {
+      /* eval indirecto: el código corre en el ámbito global, como cuando
+         venía en su propio <script>. */
+      (0, eval)(todo.slice(i + 10));
+    } catch (e) {
+      rendirse('La app no arrancó: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  function baja(version, bytes) {
+    var total = Math.ceil(bytes / TROZO);
+    var partes = [];
+    var hechos = 0;
+    for (var i = 0; i < total; i++) {
+      var guardado = g('t.' + version + '.' + i);
+      partes.push(guardado);
+      if (guardado !== null) hechos++;
+    }
+    pct(hechos / total);
+
+    function siguiente(i, intento) {
+      if (i >= total) {
+        var todo = partes.join('');
+        s('v', version);
+        if (!s('app.' + version, todo)) {
+          /* No cupo en el teléfono: igual se abre, solo que la próxima vez
+             se vuelve a bajar. Mejor abrir que no abrir. */
+          di('Abriendo…');
+        }
+        for (var k = 0; k < total; k++) q('t.' + version + '.' + k);
+        enciende(todo);
+        return;
+      }
+      if (partes[i] !== null) { siguiente(i + 1, 0); return; }
+
+      di('Bajando la app… ' + (i + 1) + ' de ' + total +
+         (intento ? ' (reintento ' + intento + ')' : ''));
+      var a = i * TROZO, b = Math.min(bytes, (i + 1) * TROZO) - 1;
+      pide('app.txt?v=' + version, a + '-' + b).then(function (r) {
+        if (!r.rango) {
+          /* El servidor mandó el archivo completo en vez del pedazo:
+             entonces ya está todo y no hay nada que partir. */
+          s('v', version); s('app.' + version, r.texto);
+          for (var k = 0; k < total; k++) q('t.' + version + '.' + k);
+          enciende(r.texto);
+          return;
+        }
+        partes[i] = r.texto;
+        s('t.' + version + '.' + i, r.texto);
+        hechos++; pct(hechos / total);
+        siguiente(i + 1, 0);
+      }, function () {
+        if (intento + 1 >= INTENTOS) {
+          rendirse('Se atoró en el pedazo ' + (i + 1) + ' de ' + total +
+                   '. Lo que ya bajó se guardó: al reintentar sigue desde ahí.');
+          return;
+        }
+        setTimeout(function () { siguiente(i, intento + 1); }, 600 * (intento + 1));
+      });
+    }
+    siguiente(0, 0);
+  }
+
+  /* 1. ¿Ya está guardada? Se abre de una, sin tocar la red. */
+  var vGuardada = g('v');
+  var appGuardada = vGuardada ? g('app.' + vGuardada) : null;
+  if (appGuardada) {
+    enciende(appGuardada);
+    /* Y de pasada, en segundo plano y sin estorbar, se revisa si hay
+       versión nueva para la próxima vez. */
+    setTimeout(function () {
+      pide('version.txt?t=' + Date.now()).then(function (r) {
+        var p = String(r.texto).trim().split('|');
+        if (p[0] && p[0] !== vGuardada) { q('app.' + vGuardada); q('v'); }
+      }, function () {});
+    }, 3000);
+    return;
+  }
+
+  /* 2. No está: hay que bajarla. */
+  di('Preparando…');
+  pide('version.txt?t=' + Date.now()).then(function (r) {
+    var p = String(r.texto).trim().split('|');
+    var version = p[0], bytes = parseInt(p[1], 10);
+    if (!version || !bytes) { rendirse('El servidor contestó algo raro. Reintenta.'); return; }
+    baja(version, bytes);
+  }, function (e) {
+    rendirse('No se pudo empezar: ' + (e && e.message ? e.message : 'sin conexión') +
+             '. Necesitas señal la primera vez.');
+  });
+})();
+</script>
+</body>
+</html>
