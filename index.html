@@ -155,8 +155,15 @@ function vqFallo(motivo) {
   b.onclick = function () { location.reload(); };
   w.appendChild(h); w.appendChild(p); w.appendChild(b);
 }
+/* El caso que de verdad pasa con mala señal no es que app.js falle: es
+   que NUNCA TERMINA DE LLEGAR. Ahí onerror no dispara nunca y el de
+   abajo tampoco corre, porque el navegador sigue esperando el script.
+   Por eso hace falta un reloj, y por eso arranca aquí, antes de pedirlo.
+   JP, 20 nov: "en la parte de abajo se ve que no acaba de cargar y la
+   pantalla negra". */
+setTimeout(function () { vqFallo('está tardando demasiado'); }, 10000);
 </script>
-<script src="app.js?v=23" onerror="vqFallo('no se bajó app.js')"></script>
+<script src="app.js?v=24" onerror="vqFallo('no se bajó app.js')"></script>
 <script>
 /* app.js corre de corrido, así que para cuando llega aquí ya puso vqListo.
    Si no está, llegó pero tronó a la mitad. */
