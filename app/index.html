@@ -2887,12 +2887,17 @@ try { window.vqListo = true; } catch (e) {}
    asi que hay que ir a matarlo. */
 try {
   if (navigator.serviceWorker) {
+    /* Mata al fantasma de la version de prueba, que sigue vivo en los
+       telefonos y sirve copias rancias. OJO: solo a los de FUERA de esta
+       carpeta, porque el de aqui es el que guarda la app. */
     navigator.serviceWorker.getRegistrations().then(function (rs) {
-      rs.forEach(function (r) { r.unregister(); });
+      var mio = new URL("./", location).href;
+      rs.forEach(function (r) { if (r.scope !== mio) r.unregister(); });
     });
-  }
-  if (window.caches && caches.keys) {
-    caches.keys().then(function (ks) { ks.forEach(function (k) { caches.delete(k); }); });
+    /* Y guarda la app, para que abra sin red la proxima vez. */
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("./sw.js").catch(function () {});
+    });
   }
 } catch (e) {}
 </script>
