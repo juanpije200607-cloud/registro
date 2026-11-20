@@ -172,8 +172,19 @@ function baja(silencio) {
       pinta();
     })
     .catch(function (e) {
-      if (S.datos) { if (!silencio) avisa('No se pudo actualizar'); }
-      else pidePin('No se pudo conectar: ' + (e.message || 'falló la conexión'));
+      if (!S.datos) {
+        pidePin('No se pudo conectar: ' + (e.message || 'falló la conexión'));
+        return;
+      }
+      /* Si lo que está en pantalla es el esqueleto del cache, el usuario
+         está viendo ceros falsos: se le dice aunque la bajada fuera
+         silenciosa, porque nadie le pidió nada y aun así le mentimos. */
+      if (S.datos.viejo) {
+        S.datos.porQue = e.message || 'falló la conexión';
+        pinta();
+        return;
+      }
+      if (!silencio) avisa('No se pudo actualizar');
     });
 }
 
@@ -261,7 +272,11 @@ function arranca() {
   var cache = get(LS.cat);
   if (cache && cache.length > 2 && get(LS.pin) && get(LS.url) && get(LS.quien)) {
     try {
-      S.datos = { catalogo: JSON.parse(cache), pendientes: [], hoy: {}, minimo: 1 };
+      /* viejo: esto es el esqueleto del cache, no los datos de verdad.
+         Lo limpia la bajada al reemplazar S.datos; mientras siga puesto,
+         la pantalla lo dice (ver barraCola). */
+      S.datos = { catalogo: JSON.parse(cache), pendientes: [], hoy: {},
+                  minimo: 1, viejo: true };
       S.rol = get(LS.quien) || 'JP';
       pinta();
     } catch (e) {}
@@ -310,6 +325,19 @@ function pintaNav() {
 }
 
 function barraCola(p) {
+  /* Al arrancar se pinta el catálogo guardado en el teléfono, pero sin
+     pendientes y sin el saldo de Franco: esos llegan con la bajada. Si la
+     bajada falla, la pantalla se queda enseñando CEROS que no son ciertos
+     —"Por cobrar" vacío, Franco en cero— y parece que cargó bien.
+     Un cero falso es peor que un error, así que aquí se dice con palabras.
+     Pasó el 20 nov: JP veía a Vale y a Parrodi en nada, y a Franco en cero,
+     con el script contestando los dos pendientes y sus $1,755. */
+  if (S.datos && S.datos.viejo) {
+    p.appendChild(el('div', 'cola malo',
+      'Datos guardados en este teléfono. No se pudo actualizar' +
+      (S.datos.porQue ? ': ' + S.datos.porQue : '') +
+      '. Por cobrar y lo de Franco NO se están mostrando.'));
+  }
   var c = cola();
   if (!c.length) return;
   var d = el('div', 'cola', c.length + (c.length === 1
