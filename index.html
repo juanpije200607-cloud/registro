@@ -150,6 +150,13 @@ a{color:var(--ink-2)}
 var LS = {
   url: 'vq.url', pin: 'vq.pin', cat: 'vq.cat', cola: 'vq.cola', quien: 'vq.quien'
 };
+/* Sello de version, visible en Ajustes. Para que exista: las tres copias de
+   la app (/registro/, /registro/app/ y /registro/p/) sirven primero lo que
+   tienen guardado y revisan si hay version nueva DESPUES, asi que un cambio
+   tarda dos aperturas en entrar. Sin un sello a la vista, no habia forma de
+   saber que version corre un telefono, y el sintoma era "ya lo arregle" /
+   "sigue igual". JP, 25 nov. Subirlo en cada cambio publicado. */
+var VERSION_APP = '2026-11-25b';
 var S = {
   rol: '', datos: null, tab: 'inicio',
   venta: { de: 'Maleta', mo: '', sas: [], pr: '1', pz: 1, mn: 0, fp: 'Efectivo', ef: 0, d: '' },
@@ -1131,8 +1138,20 @@ function vPedir(p) {
   w.appendChild(b);
 }
 
-/* Meta de la maleta: 2 por sabor en Waka 33k/36k/15k/100k y Lana; 1 en Fasta y Elfbar */
-function metaMaleta(modelo) {
+/* Meta de la maleta de JP: 2 por sabor en Waka 33k/36k/15k/100k y Lana;
+   1 en Fasta, Elfbar e iPlay; 0 en Waka 30k.
+   Y encima, metas por sabor: hay modelos que JP no carga parejo, asi que un
+   numero por modelo le pedia piezas que no queria traer. Una excepcion aqui
+   gana sobre la del modelo. JP, 25 nov: de iPlay trae 2 de Coco Strawberry,
+   Strawberry Watermelon y Peach Mint, y 1 de los otros cuatro. */
+var META_SABOR = {
+  'iPlay Xbox 15k|Coco Strawberry': 2,
+  'iPlay Xbox 15k|Strawberry Watermelon': 2,
+  'iPlay Xbox 15k|Peach Mint': 2
+};
+function metaMaleta(modelo, sabor) {
+  var k = modelo + '|' + sabor;
+  if (Object.prototype.hasOwnProperty.call(META_SABOR, k)) return META_SABOR[k];
   if (/Waka 30k/.test(modelo)) return 0;
   if (/Waka (33k|36k|15k|100k)|Lana/.test(modelo)) return 2;
   return 1;
@@ -1140,7 +1159,7 @@ function metaMaleta(modelo) {
 function faltaMaleta() {
   var out = [];
   (S.datos.catalogo || []).forEach(function (r) {
-    var m = metaMaleta(r.mo);
+    var m = metaMaleta(r.mo, r.sa);
     if (r.ma < m && r.ca > 0) {
       out.push({ mo: r.mo, sa: r.sa, n: Math.min(m - r.ma, r.ca), ca: r.ca });
     }
@@ -2922,6 +2941,53 @@ function vAjustes() {
   b1.onclick = function () { hoja(null); baja(); avisa('Actualizando…'); };
   c.appendChild(b1);
 
+  /* Esto NO son los datos: es el programa. Las tres copias abren con lo
+     guardado y revisan despues, asi que un arreglo tarda dos aperturas en
+     llegar y uno cree que no se arreglo. Este boton lo trae ahora. Nunca
+     toca la cola ni el PIN: solo borra lo guardado del programa (cache del
+     service worker y las llaves vqb. del arranque por pedazos), y si hay
+     movimientos sin subir se niega, porque ahi viven las ventas sin senal. */
+  var b1b = el('button', 'b', 'Traer la versión nueva de la app');
+  b1b.onclick = function () {
+    var pend = cola().length;
+    if (pend) {
+      avisa('Primero sube los ' + pend + ' movimientos pendientes');
+      return;
+    }
+    hoja(null);
+    avisa('Buscando versión nueva…');
+    var tareas = [];
+    try {
+      if (window.caches && caches.keys) {
+        tareas.push(caches.keys().then(function (ks) {
+          return Promise.all(ks.map(function (k) { return caches['delete'](k); }));
+        }));
+      }
+    } catch (e) {}
+    try {
+      if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+        tareas.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+          return Promise.all(rs.map(function (r) { return r.unregister(); }));
+        }));
+      }
+    } catch (e) {}
+    try {
+      for (var i = localStorage.length - 1; i >= 0; i--) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf('vqb.') === 0) localStorage.removeItem(k);
+      }
+    } catch (e) {}
+    var recarga = function () {
+      try { location.replace(location.pathname + '?nueva=' + Date.now()); }
+      catch (e) { location.reload(); }
+    };
+    if (tareas.length) {
+      Promise.all(tareas).then(recarga, recarga);
+      setTimeout(recarga, 2500);
+    } else { setTimeout(recarga, 300); }
+  };
+  c.appendChild(b1b);
+
   var n = cola().length;
   var b2 = el('button', 'b', n ? 'Subir ' + n + ' movimientos pendientes' : 'No hay nada por subir');
   b2.disabled = !n;
@@ -2935,6 +3001,10 @@ function vAjustes() {
     hoja(null); pidePin('');
   };
   c.appendChild(b3);
+
+  var sello = el('div', 'mini', 'Versión de la app: ' + VERSION_APP);
+  sello.style.cssText = 'text-align:center; padding-top:6px';
+  c.appendChild(sello);
   hoja(c);
 }
 
