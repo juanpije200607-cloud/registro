@@ -2145,6 +2145,18 @@ function devolucionDeFranco(soloFaltantes) {
     c.appendChild(el('div', 'mini', soloFaltantes
       ? 'Sabores que él trae y tú ya no tienes en casa. Las piezas regresan a tu Casa.'
       : 'Lo que te devuelva regresa a tu Casa.'));
+    /* El boton y los contadores se actualizan sin redibujar la hoja. Antes
+       cada +/- llamaba a hoja(null) y dibuja(), asi que la lista se iba
+       hasta arriba en cada toque y surtir era tedioso; con 106 sabores en
+       el catalogo se volvio imposible. JP, 25 nov. Regla para cualquier
+       lista nueva con +/-: mueve el numero del renglon, no la pantalla. */
+    var btn = el('button', 'b gde', 'Recibí');
+    var refresca = function () {
+      var t = 0;
+      Object.keys(sel).forEach(function (q) { t += sel[q] || 0; });
+      btn.textContent = t ? 'Recibí ' + t + ' piezas' : 'Recibí';
+      btn.disabled = !t;
+    };
     var cuerpo = el('div', 'col g6');
     cuerpo.style.cssText = 'max-height:48vh; overflow-y:auto';
     lista.forEach(function (r) {
@@ -2165,17 +2177,20 @@ function devolucionDeFranco(soloFaltantes) {
           var num = el('div', null, String(sel[k] || 0));
           num.style.cssText = 'min-width:22px; text-align:center; font-weight:600';
           var mas = el('button', 'b chico', '+'); mas.style.minWidth = '38px';
-          menos.onclick = function () { sel[k] = Math.max(0, (sel[k] || 0) - 1); hoja(null); dibuja(); };
-          mas.onclick = function () { sel[k] = Math.min(n, (sel[k] || 0) + 1); hoja(null); dibuja(); };
+          menos.onclick = function () {
+            sel[k] = Math.max(0, (sel[k] || 0) - 1); num.textContent = String(sel[k]); refresca();
+          };
+          mas.onclick = function () {
+            sel[k] = Math.min(n, (sel[k] || 0) + 1); num.textContent = String(sel[k]); refresca();
+          };
           f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
           ren.appendChild(f);
           cuerpo.appendChild(ren);
         });
     });
     c.appendChild(cuerpo);
-    var tot = Object.keys(sel).reduce(function (a, k) { return a + sel[k]; }, 0);
-    var b = el('button', 'b gde', tot ? 'Recibí ' + tot + ' piezas' : 'Recibí');
-    b.disabled = !tot;
+    refresca();
+    var b = btn;
     b.onclick = function () {
       Object.keys(sel).forEach(function (k) {
         if (!sel[k]) return;
@@ -2324,6 +2339,29 @@ function rellenarMiMaleta() {
        cuántas le faltan y cuántas lleva puestas. */
     c.appendChild(el('div', 'mini',
       'De tu casa a tu maleta. Escoge los sabores; arriba de cada modelo te digo cuántas te faltan.'));
+    /* El boton y los contadores se actualizan sin redibujar la hoja. Antes
+       cada +/- llamaba a hoja(null) y dibuja(), asi que la lista se iba
+       hasta arriba en cada toque y surtir era tedioso; con 106 sabores en
+       el catalogo se volvio imposible. JP, 25 nov. Regla para cualquier
+       lista nueva con +/-: mueve el numero del renglon, no la pantalla. */
+    var btn = el('button', 'b gde', 'No metí nada');
+    var cabs = [];
+    var refresca = function () {
+      var t = 0;
+      Object.keys(sel).forEach(function (q) { t += sel[q] || 0; });
+      btn.textContent = t ? 'Pasé ' + t + ' piezas a mi maleta' : 'No metí nada';
+      btn.disabled = !t;
+      /* Los encabezados por modelo tambien dicen cuantas lleva puestas, asi
+         que se recalculan aqui en vez de redibujar la lista entera. */
+      cabs.forEach(function (cb) {
+        var puestas = 0;
+        Object.keys(sel).forEach(function (q) {
+          if (q.indexOf(cb.mo + '|') === 0) puestas += sel[q] || 0;
+        });
+        cb.nodo.textContent = (cb.falta ? 'faltan ' + cb.falta : 'completo') +
+          (puestas ? ' · metes ' + puestas : '');
+      });
+    };
     var cuerpo = el('div', 'col g6');
     cuerpo.style.cssText = 'max-height:48vh; overflow-y:auto';
     var moActual = '';
@@ -2337,8 +2375,10 @@ function rellenarMiMaleta() {
         var ct = el('div', 'eti', r.mo);
         cab.appendChild(ct);
         var falta = m ? m.faltaMaleta : 0;
-        cab.appendChild(el('div', 'mini', (falta ? 'faltan ' + falta : 'completo') +
-          (puestas ? ' · metes ' + puestas : '')));
+        var subcab = el('div', 'mini', (falta ? 'faltan ' + falta : 'completo') +
+          (puestas ? ' · metes ' + puestas : ''));
+        cab.appendChild(subcab);
+        cabs.push({ mo: r.mo, nodo: subcab, falta: falta });
         cuerpo.appendChild(cab);
       }
       var k = r.mo + '|' + r.sa;
@@ -2355,17 +2395,20 @@ function rellenarMiMaleta() {
       var num = el('div', null, String(sel[k] || 0));
       num.style.cssText = 'min-width:22px; text-align:center; font-weight:600';
       var mas = el('button', 'b chico', '+'); mas.style.minWidth = '38px';
-      menos.onclick = function () { sel[k] = Math.max(0, (sel[k] || 0) - 1); hoja(null); dibuja(); };
-      mas.onclick = function () { sel[k] = Math.min(enCasa, (sel[k] || 0) + 1); hoja(null); dibuja(); };
+      menos.onclick = function () {
+        sel[k] = Math.max(0, (sel[k] || 0) - 1); num.textContent = String(sel[k]); refresca();
+      };
+      mas.onclick = function () {
+        sel[k] = Math.min(enCasa, (sel[k] || 0) + 1); num.textContent = String(sel[k]); refresca();
+      };
       f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
       ren.appendChild(f);
       cuerpo.appendChild(ren);
     });
     c.appendChild(cuerpo);
 
-    var n = Object.keys(sel).reduce(function (a, k) { return a + (sel[k] || 0); }, 0);
-    var b = el('button', 'b gde', n ? 'Pasé ' + n + ' piezas a mi maleta' : 'No metí nada');
-    b.disabled = !n;
+    refresca();
+    var b = btn;
     b.onclick = function () {
       Object.keys(sel).forEach(function (k) {
         if (!sel[k]) return;
@@ -2391,6 +2434,18 @@ function rellenarMaleta() {
     c.appendChild(el('h1', null, 'Rellenar la maleta'));
     c.appendChild(el('div', 'mini',
       'Ya traen la cantidad que falta. Bájale o súbele a lo que de verdad metiste.'));
+    /* El boton y los contadores se actualizan sin redibujar la hoja. Antes
+       cada +/- llamaba a hoja(null) y dibuja(), asi que la lista se iba
+       hasta arriba en cada toque y surtir era tedioso; con 106 sabores en
+       el catalogo se volvio imposible. JP, 25 nov. Regla para cualquier
+       lista nueva con +/-: mueve el numero del renglon, no la pantalla. */
+    var btn = el('button', 'b gde', 'No metí nada');
+    var refresca = function () {
+      var t = 0;
+      Object.keys(sel).forEach(function (q) { t += sel[q] || 0; });
+      btn.textContent = t ? 'Pasé ' + t + ' piezas a la maleta' : 'No metí nada';
+      btn.disabled = !t;
+    };
     var cuerpo = el('div', 'col g6');
     cuerpo.style.cssText = 'max-height:48vh; overflow-y:auto';
     falta.forEach(function (x) {
@@ -2406,17 +2461,20 @@ function rellenarMaleta() {
       var num = el('div', null, String(sel[k]));
       num.style.cssText = 'min-width:22px; text-align:center; font-weight:600';
       var mas = el('button', 'b chico', '+'); mas.style.minWidth = '38px';
-      menos.onclick = function () { sel[k] = Math.max(0, sel[k] - 1); hoja(null); dibuja(); };
-      mas.onclick = function () { sel[k] = Math.min(x.ca, sel[k] + 1); hoja(null); dibuja(); };
+      menos.onclick = function () {
+        sel[k] = Math.max(0, sel[k] - 1); num.textContent = String(sel[k]); refresca();
+      };
+      mas.onclick = function () {
+        sel[k] = Math.min(x.ca, sel[k] + 1); num.textContent = String(sel[k]); refresca();
+      };
       f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
       ren.appendChild(f);
       cuerpo.appendChild(ren);
     });
     c.appendChild(cuerpo);
 
-    var n = Object.keys(sel).reduce(function (a, k) { return a + sel[k]; }, 0);
-    var b = el('button', 'b gde', n ? 'Pasé ' + n + ' piezas a la maleta' : 'No metí nada');
-    b.disabled = !n;
+    refresca();
+    var b = btn;
     b.onclick = function () {
       Object.keys(sel).forEach(function (k) {
         if (!sel[k]) return;
@@ -2625,6 +2683,18 @@ function surtido(pedido) {
     c.appendChild(el('div', 'mini', pedido
       ? 'Ya viene con lo que te pidió. Cambia lo que quieras antes de entregar.'
       : 'Elige cuántas piezas de cada sabor le entregas.'));
+    /* El boton y los contadores se actualizan sin redibujar la hoja. Antes
+       cada +/- llamaba a hoja(null) y dibuja(), asi que la lista se iba
+       hasta arriba en cada toque y surtir era tedioso; con 106 sabores en
+       el catalogo se volvio imposible. JP, 25 nov. Regla para cualquier
+       lista nueva con +/-: mueve el numero del renglon, no la pantalla. */
+    var btn = el('button', 'b gde', 'Entregar surtido');
+    var refresca = function () {
+      var t = 0;
+      Object.keys(sel).forEach(function (q) { t += sel[q] || 0; });
+      btn.textContent = t ? 'Entregar ' + t + ' piezas' : 'Entregar surtido';
+      btn.disabled = !t;
+    };
     var cuerpo = el('div', 'col g6');
     cuerpo.style.cssText = 'max-height:46vh; overflow-y:auto';
     (S.datos.catalogo || []).filter(function (r) { return r.ca > 0; })
@@ -2639,16 +2709,19 @@ function surtido(pedido) {
         var num = el('div', null, String(sel[k] || 0));
         num.style.minWidth = '20px';
         var mas = el('button', 'b chico', '+'); mas.style.minWidth = '34px';
-        menos.onclick = function () { sel[k] = Math.max(0, (sel[k] || 0) - 1); hoja(null); dibuja(); };
-        mas.onclick = function () { sel[k] = Math.min(r.ca, (sel[k] || 0) + 1); hoja(null); dibuja(); };
+        menos.onclick = function () {
+          sel[k] = Math.max(0, (sel[k] || 0) - 1); num.textContent = String(sel[k]); refresca();
+        };
+        mas.onclick = function () {
+          sel[k] = Math.min(r.ca, (sel[k] || 0) + 1); num.textContent = String(sel[k]); refresca();
+        };
         f.appendChild(menos); f.appendChild(num); f.appendChild(mas);
         ren.appendChild(f);
         cuerpo.appendChild(ren);
       });
     c.appendChild(cuerpo);
-    var n = Object.keys(sel).reduce(function (a, k) { return a + sel[k]; }, 0);
-    var b = el('button', 'b gde', n ? 'Entregar ' + n + ' piezas' : 'Entregar surtido');
-    b.disabled = !n;
+    refresca();
+    var b = btn;
     b.onclick = function () {
       Object.keys(sel).forEach(function (k) {
         if (!sel[k]) return;
